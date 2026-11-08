@@ -221,7 +221,7 @@ describe('tokens per second', () => {
     expect(l.map((p) => p.drop)).toEqual([0, 5]); // "shift+tab" (9) went first
     expect(r.map((p) => p.drop)).toEqual([6, 0]); // then the token totals (7)
 
-    for (const columns of [120, 60]) {
+    for (const columns of [120, 80, 60]) {
       class Tty extends PassThrough {
         isTTY = true;
         columns = columns;
@@ -242,7 +242,15 @@ describe('tokens per second', () => {
         speed: { tokensPerSecond: 42, live: true },
       };
       const app = render(
-        <Footer mode="auto" sandbox="guard" snap={snap} contextWindow={100_000} swarmCount={0} queued={0} />,
+        <Footer
+          mode="auto"
+          sandbox="container"
+          effort="xhigh"
+          snap={{ ...snap, browser: { open: true, holder: 'agent' } }}
+          contextWindow={100_000}
+          swarmCount={0}
+          queued={0}
+        />,
         { stdout: stdout as never, patchConsole: false, interactive: true },
       );
       await sleep(50);
@@ -253,7 +261,9 @@ describe('tokens per second', () => {
         .filter((l) => l.trim());
       expect(lines).toHaveLength(1); // one line, nothing run together
       expect(lines[0]).toContain('context 77%');
-      if (columns === 120) expect(lines[0]).toContain('42 tok/s');
+      // A busy footer (effort, container sandbox, browser) still keeps the speed on a narrow terminal.
+      expect(lines[0]).toContain('42 tok/s');
+      if (columns === 120) expect(lines[0]).toContain('effort xhigh');
     }
   });
 });

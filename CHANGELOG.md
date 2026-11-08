@@ -4,6 +4,8 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- The speed meter stays in the footer on narrow terminals: it now outlasts the effort, sandbox and browser labels
+  when the line runs out of room (since the effort label was added it was dropped below about 80 columns).
 - **`/login` and `/logout`**, after pi's: pick a provider, then give it an API key (masked) or an address
   (pre-filled, so swapping llama.cpp servers is one edit); add a server of your own; each is checked by listing its
   models before it is saved, then you pick one, and a model in use reconnects at once. `/logout` removes a saved key
