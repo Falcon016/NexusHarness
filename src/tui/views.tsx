@@ -746,8 +746,8 @@ export function Footer({
       </Text>,
     ),
     part('shift+tab', 9, <Text color={t.faint}>shift+tab</Text>),
-    part(`sandbox ${sb}`, 5, <Text color={t.dim}>sandbox {sb}</Text>),
-    ...(effort ? [part(`effort ${effort}`, 4, <Text color={t.sky}>effort {effort}</Text>)] : []),
+    part(`sandbox ${sb}`, 6, <Text color={t.dim}>sandbox {sb}</Text>),
+    ...(effort ? [part(`effort ${effort}`, 5, <Text color={t.sky}>effort {effort}</Text>)] : []),
     ...(swarmCount ? [part(`swarm ×${swarmCount}`, 3, <Text color={t.rose}>swarm ×{swarmCount}</Text>)] : []),
     ...(snap.browser.open ? [part('browser', 4, <Text color={t.blue}>browser</Text>)] : []),
     ...(queued ? [part(`${queued} queued`, 1, <Text color={t.gold}>{queued} queued</Text>)] : []),
@@ -770,7 +770,7 @@ export function Footer({
       ? [
           part(
             `${speed.tokensPerSecond} tok/s`,
-            6,
+            2, // the speed outlasts the settings labels: it is the one thing here that changes as you watch
             <Text color={t.faint}>
               <Text color={speed.live ? t.accent : t.dim}>{speed.tokensPerSecond}</Text> tok/s
             </Text>,
