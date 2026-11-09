@@ -98,9 +98,31 @@ port is also 11434, so if you run llama.cpp there, override `providers.llamacpp.
 
 - `AGENTS.md` / `NEXUSHARNESS.md`: read from the config dir and every directory from `/` down to the working directory.
 - `SYSTEM.md` in the config dir (or a trusted project's `.nexusharness/`) replaces the built-in system prompt.
-- `skills/<name>/SKILL.md` with `name` and `description` front-matter: listed to the model, loaded on demand.
-  Three ship built in: `python-env` (find and repair a Python environment), `security-review` (secrets, injection,
-  auth and dependency checks with severities) and `pre-commit-review` (run the project's checks, read the diff, write
-  the commit message). A user or project skill with the same name replaces a built-in one. `/skills` lists them.
+- `skills/<name>/SKILL.md` with `name` and `description` front-matter: listed to the model, loaded on demand. Other
+  files in the skill's folder (playbooks, scripts, templates) are listed when it loads and read with the skill tool's
+  `file` argument, so a large skill costs context only for the parts a task uses; reads stay inside the folder. A
+  user or project skill with the same name replaces a built-in one. `/skills` lists them. Built in:
+
+  | Skill               | For                                                                                   |
+  | ------------------- | ------------------------------------------------------------------------------------- |
+  | `it-admin`          | Sysadmin work on Linux, Windows, macOS: read-only snapshot scripts and nine playbooks |
+  | `debugging`         | Reproduce, narrow down, fix the cause and prove it                                    |
+  | `pr-review`         | Review a pull request or branch with findings by severity                             |
+  | `pre-commit-review` | Run the checks, read the diff, write the commit message                               |
+  | `security-review`   | Secrets, injection, auth and dependency checks with severities                        |
+  | `simplify`          | Go back over recent changes: reuse, remove waste, keep behaviour                      |
+  | `webapp-testing`    | Test a running web app through the browser tools or Playwright                        |
+  | `frontend-design`   | UI with a deliberate visual direction and solid basics                                |
+  | `documents`         | PDF, Word, Excel and PowerPoint files with Python (notes per format)                  |
+  | `mcp-builder`       | Build an MCP server and connect it                                                    |
+  | `python-env`        | Find and repair a Python environment                                                  |
+  | `init`              | Write or refresh `AGENTS.md`                                                          |
+  | `resume-work`       | Pick up earlier work from saved conversations, checked against the project            |
+  | `skill-creator`     | Write a new skill                                                                     |
+
+- Saved conversations: every session is a JSONL file under `<data>/sessions/<project>/`. The agent's `sessions`
+  tool lists, searches (tool output included) and reads them, this folder's by default or every folder's with
+  `scope: "all"`; it is read-only, hides secrets it finds, and marks what it returns as data. `nexus -c` and
+  `/resume [id]` bring a conversation back on screen; `/flush` deletes old ones.
 - `prompts/<name>.md` → `/name`; `$ARGUMENTS` and `$1`…`$9` are substituted.
 - `extensions/*.{ts,js}`: see the README and [examples/extensions](../examples/extensions).

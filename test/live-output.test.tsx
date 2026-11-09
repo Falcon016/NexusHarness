@@ -135,6 +135,7 @@ describe('live area height', () => {
     ].join('\n');
     const snap: UiSnapshot = {
       items: [],
+      epoch: 0,
       live: [
         { name: 'main', text, thinking: 0, thought: '', tools: [], running: true, startedAt: Date.now() },
       ],
@@ -232,6 +233,7 @@ describe('tokens per second', () => {
       stdout.on('data', (d: Buffer) => (out += d.toString()));
       const snap: UiSnapshot = {
         items: [],
+        epoch: 0,
         live: [],
         swarmActive: false,
         browser: { open: false, holder: 'agent' },

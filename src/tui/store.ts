@@ -55,6 +55,8 @@ export interface LiveAgent {
 
 export interface UiSnapshot {
   items: Item[];
+  /** Bumped when the transcript is replaced (/clear, /resume, /tree): the screen starts over. */
+  epoch: number;
   live: LiveAgent[];
   swarmActive: boolean;
   browser: { open: boolean; url?: string; holder: 'agent' | 'user'; lastAction?: string };
@@ -136,7 +138,8 @@ function clearThinking(a: LiveAgent): void {
 
 /**
  * UI state lives outside React so agent events (which can be very chatty while streaming) are
- * folded into a snapshot and published at most ~30 times a second.
+ * folded into a snapshot and published at most 20 times a second (smooth enough for text, and a third less
+ * rendering than 30 while a reply streams).
  */
 export class UiStore {
   private items: Item[] = [];
@@ -156,8 +159,16 @@ export class UiStore {
   private compacting: { pct: number } | undefined;
   private showThinking = false;
   private swarmBudget: { used: number; limit: number } | undefined;
+  private epoch = 0;
+  /** Called when the transcript is replaced, before it is redrawn: the terminal UI clears the screen here. */
+  onClear: (() => void) | undefined;
   /** Per agent, for replies printed line by line: whether part is printed, and the full reasoning so far. */
   private streamed = new Map<string, { printed: boolean; thought: string }>();
+  /**
+   * Per agent, how far `settledLength` has scanned the reply being streamed, so each chunk only scans the new
+   * text. Rescanning it all made a long code block (nothing in it is printed until it ends) quadratic.
+   */
+  private settle = new Map<string, { pos: number; inFence: boolean; cut: number }>();
   private liveSpeed = new Map<string, number>();
   private lastSpeed: number | undefined;
 
@@ -179,6 +190,7 @@ export class UiStore {
   private build(): UiSnapshot {
     return {
       items: this.items,
+      epoch: this.epoch,
       live: [...this.live.values()],
       swarmActive: this.swarmActive,
       browser: this.browser,
@@ -200,7 +212,7 @@ export class UiStore {
   private publish(immediate = false): void {
     this.dirty = true;
     if (immediate) return this.flush();
-    this.timer ??= setTimeout(() => this.flush(), 33);
+    this.timer ??= setTimeout(() => this.flush(), 50);
   }
 
   private flush(): void {
@@ -230,7 +242,16 @@ export class UiStore {
   }
   clear(): void {
     this.items = [];
-    this.live.clear();
+    this.epoch++;
+    this.onClear?.();
+    // Live state goes, but every attached agent keeps an entry (the footer and panes look agents up by name).
+    for (const [name, a] of this.live) {
+      a.text = '';
+      a.tools = [];
+      clearThinking(a);
+      this.streamed.delete(name);
+      this.settle.delete(name);
+    }
     this.publish(true);
   }
 
@@ -342,11 +363,14 @@ export class UiStore {
         a.text = '';
         clearThinking(a);
         this.streamed.delete(name);
+        this.settle.delete(name);
         break;
       case 'text':
         if (a.thinkingSince && !a.thinkingUntil) a.thinkingUntil = Date.now();
         a.text += e.delta;
-        if (this.opts.printAsStreamed && !inSwarm) this.printSettled(name, a);
+        // Only a chunk with a line break can finish a line. Skipping the rest also matters for speed: searching
+        // the reply flattens the string built up chunk by chunk, a copy of all of it each time.
+        if (this.opts.printAsStreamed && !inSwarm && e.delta.includes('\n')) this.printSettled(name, a);
         break;
       case 'thinking': {
         a.thinking += e.delta.length;
@@ -378,6 +402,7 @@ export class UiStore {
           if (text) this.push({ kind: 'assistant', text, agent: name });
         }
         a.text = '';
+        this.settle.delete(name);
         clearThinking(a);
         break;
       }
@@ -469,6 +494,7 @@ export class UiStore {
         a.running = false;
         a.tools = [];
         a.text = '';
+        this.settle.delete(name);
         this.status = undefined;
         if (e.stopReason === 'aborted') this.notice(`${inSwarm ? name + ': ' : ''}Interrupted.`, 'warn');
         else if (e.stopReason === 'max_tokens')
@@ -488,8 +514,18 @@ export class UiStore {
 
   /** Print the finished lines of a reply being streamed; the rest stays live. */
   private printSettled(name: string, a: LiveAgent): void {
+    let st = this.settle.get(name);
+    if (!st) this.settle.set(name, (st = { pos: 0, inFence: false, cut: 0 }));
+    // The same rule as settledLength, continued from where the last chunk left off.
+    for (let nl = a.text.indexOf('\n', st.pos); nl !== -1; nl = a.text.indexOf('\n', st.pos)) {
+      const line = a.text.slice(st.pos, nl);
+      if (/^\s*```/.test(line)) st.inFence = !st.inFence;
+      if (!st.inFence && !/^\s*\|/.test(line)) st.cut = nl + 1;
+      st.pos = nl + 1;
+    }
+    if (!st.cut) return;
     // Trailing blank lines wait, so the spacing is printed with the line that follows them.
-    const part = a.text.slice(0, settledLength(a.text)).replace(/\n(?:[ \t]*\n)+$/, '\n');
+    const part = a.text.slice(0, st.cut).replace(/\n(?:[ \t]*\n)+$/, '\n');
     if (!part.trim()) return;
     const s = this.streamed.get(name) ?? { printed: false, thought: '' };
     if (!s.printed) this.pushThought(name, a, s.thought.trim());
@@ -497,6 +533,8 @@ export class UiStore {
     s.printed = true;
     this.streamed.set(name, s);
     a.text = a.text.slice(part.length);
+    st.pos -= part.length;
+    st.cut -= part.length;
   }
 
   private pushPart(name: string, part: string, cont: boolean): void {

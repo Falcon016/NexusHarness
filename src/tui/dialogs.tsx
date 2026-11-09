@@ -1,4 +1,4 @@
-import { Box, Text, useInput, usePaste } from 'ink';
+import { Box, Text, useInput, usePaste, useWindowSize } from 'ink';
 import { useState } from 'react';
 import type { ApprovalRequest, ApprovalResponse } from '../agent/agent.js';
 import { agentColor, useTheme } from './context.js';
@@ -78,19 +78,22 @@ export function SelectList<T>({
     if (key.return && items[i]) return onSelect(items[i]!.value);
     if (/^[1-9]$/.test(input) && items[Number(input) - 1]) onSelect(items[Number(input) - 1]!.value);
   });
-  const win = 10;
-  const start = Math.max(0, Math.min(i - 4, items.length - win));
+  const { rows } = useWindowSize();
+  // As many items as the window has room for under the transcript (input, footer and borders take ~12 rows).
+  const win = Math.max(3, Math.min(10, rows - 12));
+  const start = Math.max(0, Math.min(i - Math.floor(win / 2), items.length - win));
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={t.sky} paddingX={1}>
-      <Text bold color={t.sky}>
+      <Text bold color={t.sky} wrap="truncate-end">
         {title}
+        {items.length > win ? <Text color={t.faint}>{`  ${i + 1}/${items.length}`}</Text> : null}
       </Text>
       {items.length === 0 ? <Text color={t.dim}>Nothing to show.</Text> : null}
       {items.slice(start, start + win).map((it, k) => {
         const idx = start + k;
         const on = idx === i;
         return (
-          <Text key={idx} color={on ? t.accent : t.text}>
+          <Text key={idx} color={on ? t.accent : t.text} wrap="truncate-end">
             {on ? '› ' : '  '}
             {it.label}
             {it.hint ? <Text color={t.faint}> {it.hint}</Text> : null}
@@ -112,10 +115,13 @@ export function ApprovalDialog({
   req,
   pending,
   onResolve,
+  maxRows = 40,
 }: {
   req: ApprovalRequest;
   pending: number;
   onResolve(r: ApprovalResponse): void;
+  /** Rows the dialog may use; a long command or diff is shortened to fit. */
+  maxRows?: number;
 }) {
   const t = useTheme();
   const [i, setI] = useState(0);
@@ -150,7 +156,27 @@ export function ApprovalDialog({
   );
 
   const color = agentColor(t, req.agentId);
-  const previewLines = req.preview ? req.preview.split('\n') : [];
+  // Sized to the window, so the whole dialog (its title above all) stays on screen. On a small window it goes
+  // compact: no blank lines, key hints or reason, and the command shortened to a line.
+  const compact = maxRows < 14;
+  const fixed = 2 + 1 + 1 + 4 + (compact ? 0 : 3); // border, title, description, options; reason, keys, a gap
+  let room = Math.max(2, maxRows - fixed);
+  // The exact command gets the room first: it is what runs, whatever the description says.
+  const cmdLines = req.command ? req.command.replace(/\n+$/, '').split('\n') : [];
+  const cmdBudget = compact ? Math.min(2, room) : Math.min(12, Math.max(2, Math.floor((room - 1) * 0.6)));
+  const shownCmd = cmdLines.length <= cmdBudget ? cmdLines : cmdLines.slice(0, Math.max(1, cmdBudget - 1));
+  const cmdHidden = cmdLines.length - shownCmd.length;
+  if (cmdLines.length) room -= shownCmd.length + (cmdHidden ? 1 : 0) + (compact ? 0 : 1);
+  const previewAll = req.preview ? req.preview.split('\n') : [];
+  const previewBudget = compact ? 0 : Math.min(18, room - 1);
+  const previewLines =
+    previewBudget < 2
+      ? []
+      : previewAll.length <= previewBudget
+        ? previewAll
+        : previewAll.slice(0, previewBudget - 1);
+  const previewHidden = previewAll.length - previewLines.length;
+  const gap = compact ? 0 : 1;
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={t.gold} paddingX={1}>
       <Text>
@@ -160,23 +186,36 @@ export function ApprovalDialog({
         {req.agentId !== 'main' ? <Text color={color}> {req.agentId}</Text> : null}
         {pending > 1 ? <Text color={t.faint}> ({pending - 1} more waiting)</Text> : null}
       </Text>
-      <Text>
-        <Text bold>{req.toolName}</Text> <Text color={t.text}>{req.description}</Text>
+      <Text wrap="truncate-end">
+        <Text bold>{req.toolName}</Text> <Text color={t.text}>{req.description.split('\n')[0]}</Text>
       </Text>
-      <Text color={t.dim}>{req.reason}</Text>
+      {shownCmd.length ? (
+        <Box flexDirection="column" marginTop={gap}>
+          {shownCmd.map((l, k) => (
+            <Text key={k} wrap="truncate-end">
+              <Text color={t.faint}>{k === 0 ? '$ ' : '  '}</Text>
+              <Text color={t.sky}>{l || ' '}</Text>
+            </Text>
+          ))}
+          {cmdHidden ? <Text color={t.faint}>{`  … +${cmdHidden} more lines`}</Text> : null}
+        </Box>
+      ) : null}
+      {compact ? null : (
+        <Text color={t.dim} wrap="truncate-end">
+          {req.reason}
+        </Text>
+      )}
       {previewLines.length ? (
         <Box flexDirection="column" marginTop={1}>
-          {previewLines.slice(0, 18).map((l, k) => (
+          {previewLines.map((l, k) => (
             <Text key={k} color={diffColor(l, t)} wrap="truncate-end">
               {l || ' '}
             </Text>
           ))}
-          {previewLines.length > 18 ? (
-            <Text color={t.faint}>… +{previewLines.length - 18} more lines</Text>
-          ) : null}
+          {previewHidden ? <Text color={t.faint}>… +{previewHidden} more lines</Text> : null}
         </Box>
       ) : null}
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" marginTop={gap}>
         {feedback ? (
           <LineInput
             label="Tell it what to do:"
@@ -185,14 +224,14 @@ export function ApprovalDialog({
           />
         ) : (
           options.map((o, k) => (
-            <Text key={k} color={k === i ? t.accent : t.text}>
+            <Text key={k} color={k === i ? t.accent : t.text} wrap="truncate-end">
               {k === i ? '› ' : '  '}
               {k + 1}. {o.label}
             </Text>
           ))
         )}
       </Box>
-      {feedback ? null : (
+      {feedback || compact ? null : (
         <Keys
           items={[
             ['y', 'yes'],

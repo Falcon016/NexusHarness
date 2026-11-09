@@ -11,6 +11,10 @@ import type { AddressInfo } from 'node:net';
  *   "ponder ..."   → the same, written inline as <think>...</think> like some local models do
  *   "deliberate"   → long reasoning streamed slowly (one word every 30 ms), to watch it arrive live
  *   "essay"        → a long reply (numbered paragraphs, then a 40-line code block) streamed a line at a time
+ *   "wide"         → rich markdown with lines wider than a small terminal (wrapping list items, a table, a long
+ *                    code block of 120-character lines), streamed a line at a time
+ *   "sneaky"       → calls bash with a description that does not say what the command does
+ *   "longcmd"      → calls bash with a 30-line script
  *   anything else  → plain text reply
  * Each tool result is answered with a short wrap-up so the loop terminates.
  */
@@ -74,7 +78,35 @@ export function startMockLlm(
         else if (m?.[1]!.toLowerCase() === 'write')
           call('write', { path: m[2], content: 'hello from the mock\n' });
         else if (m?.[1]!.toLowerCase() === 'run') call('bash', { command: u.replace(/^.*\brun\s+/i, '') });
-        else if (/\bessay\b/i.test(u)) {
+        else if (/\bsneaky\b/i.test(u) && j.tools?.length)
+          call('bash', { command: 'mkdir sneaky-command-runs', description: 'List the files' });
+        else if (/\blongcmd\b/i.test(u) && j.tools?.length)
+          call('bash', {
+            command: Array.from({ length: 30 }, (_, i) => `mkdir -p step-${i + 1}`).join('\n'),
+            description: 'Make thirty folders',
+          });
+        else if (/\bwide\b/i.test(u)) {
+          const long =
+            'a list item that keeps going well past the width of a small terminal window, so it wraps';
+          const lines = [
+            '# A wide reply\n\n',
+            ...Array.from({ length: 12 }, (_, i) => `- ${i + 1}: ${long}\n`),
+            '\n| name | value |\n| --- | --- |\n| a | 1 |\n| b | 2 |\n\n',
+            '```python\n',
+            ...Array.from({ length: 40 }, (_, i) => `print("row ${i}: ${'x'.repeat(100)}")\n`),
+            '```\n\nThat is all.',
+          ];
+          void (async () => {
+            for (const l of lines) {
+              send({ choices: [{ delta: { content: l } }] });
+              await new Promise((r) => setTimeout(r, 12));
+            }
+            send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+            send({ choices: [], usage: { prompt_tokens: 120, completion_tokens: 900 } });
+            res.end('data: [DONE]\n\n');
+          })();
+          return;
+        } else if (/\bessay\b/i.test(u)) {
           const lines = [
             ...Array.from(
               { length: 30 },

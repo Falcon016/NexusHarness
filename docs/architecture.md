@@ -11,7 +11,7 @@ src/
     broker.ts        serialises approval/question prompts from many agents into one UI
     prompt.ts        system prompt (+ AGENTS.md, skills, swarm role)
   llm/               provider-neutral types, Anthropic + OpenAI-compatible streaming adapters, retry, registry
-  tools/             read, write, edit, glob, grep, ls, bash, web_fetch, todo, ask_user, skill
+  tools/             read, write, edit, glob, grep, ls, bash, web_fetch, todo, ask_user, skill, sessions
   policy/engine.ts   approval decisions (modes + rules + blocklist + grants)
   sandbox/           guard (path confinement), container (docker/podman), shell detection
   browser/           Playwright service (policy, control hand-off) + the browser_* tools

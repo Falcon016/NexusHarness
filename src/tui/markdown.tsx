@@ -191,10 +191,13 @@ export function CodeBlock({ lang, lines }: { lang: string; lines: string[] }) {
     <Box flexDirection="column" marginY={0}>
       {lang ? <Text color={t.faint}>{lang}</Text> : null}
       {lines.map((l, i) => (
-        <Text key={i} color={diff ? diffColor(l, t) : t.text} wrap="wrap">
+        // The gutter is its own column, so a wrapped line continues under the code, not under the gutter.
+        <Box key={i}>
           <Text color={t.faint}>│ </Text>
-          {l || ' '}
-        </Text>
+          <Text color={diff ? diffColor(l, t) : t.text} wrap="wrap">
+            {l || ' '}
+          </Text>
+        </Box>
       ))}
     </Box>
   );

@@ -57,11 +57,21 @@ export const askUserTool = defineTool({
 
 export const skillTool = defineTool({
   name: 'skill',
-  description: 'Load the full instructions of a named skill listed in the system prompt.',
+  description:
+    'Load the full instructions of a named skill listed in the system prompt. Some skills list extra files ' +
+    '(playbooks, scripts, templates) at the end: read one by passing its path as `file`.',
   risk: 'read',
-  schema: z.object({ name: z.string() }),
-  describe: (i) => i.name,
+  schema: z.object({
+    name: z.string(),
+    file: z.string().optional().describe("A file listed at the end of the skill's instructions"),
+  }),
+  describe: (i) => (i.file ? `${i.name}: ${i.file}` : i.name),
   async execute(input, ctx) {
+    if (input.file) {
+      const r = ctx.skills?.file?.(input.name, input.file);
+      if (!r) return { content: 'This skill has no extra files.', isError: true };
+      return 'error' in r ? { content: r.error, isError: true } : { content: r.text };
+    }
     const body = ctx.skills?.get(input.name);
     if (!body)
       return {

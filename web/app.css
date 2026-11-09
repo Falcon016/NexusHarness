@@ -1018,6 +1018,13 @@ textarea::placeholder {
   overflow: auto;
   font: 12px/1.6 var(--mono);
 }
+.card pre.command {
+  margin-bottom: 8px;
+  max-height: 180px;
+  color: var(--accent-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .row {
   display: flex;
   flex-wrap: wrap;

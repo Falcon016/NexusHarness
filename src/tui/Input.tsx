@@ -1,5 +1,5 @@
 import { Box, Text, useInput, usePaste } from 'ink';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { useTheme } from './context.js';
 import { GLYPH } from './theme.js';
 
@@ -49,7 +49,8 @@ export function matchCommands(value: string, commands: CommandHint[]): CommandHi
   return commands.filter((c) => c.name.startsWith(q)).slice(0, 7);
 }
 
-export function Input({
+/** Memoised: the app re-renders for every streamed chunk, and the input only changes when you type. */
+export const Input = memo(function Input({
   isActive,
   busy,
   commands,
@@ -234,4 +235,4 @@ export function Input({
       ) : null}
     </Box>
   );
-}
+});

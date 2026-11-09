@@ -1,4 +1,4 @@
-import { Box, Static, useApp, useStdout } from 'ink';
+import { Box, Static, useApp, useStdout, useWindowSize } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ApprovalRequest, ApprovalResponse } from '../agent/agent.js';
 import type { ApprovalMode } from '../config/schema.js';
@@ -13,6 +13,8 @@ import type { Theme } from './theme.js';
 import { Footer, ItemView, LiveArea, type BannerInfo } from './views.js';
 
 const MODE_ORDER: ApprovalMode[] = ['ask', 'edits', 'auto', 'plan'];
+/** How many transcript entries are printed again when the screen is redrawn. */
+const REPRINT_KEEP = 250;
 
 interface Props {
   runtime: Runtime;
@@ -72,6 +74,8 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
     },
     [store, reprint],
   );
+
+  const toggleThinkingKey = useCallback(() => toggleThinking(), [toggleThinking]);
 
   // Terminals reflow their contents when the window changes size (windowed to fullscreen, a split pane
   // dragged), so what Ink believes is on screen no longer matches what is there. Redrawing in place then
@@ -136,15 +140,19 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
         });
       });
     if (runtime.config.showThinking) store.setShowThinking(true);
+    store.onClear = () => {
+      if (stdout?.isTTY) stdout.write('\x1b[2J\x1b[3J\x1b[H');
+    };
     store.attachAgent(runtime.agent, 'main');
     if (runtime.browser) store.attachBrowser(runtime.browser.events);
     if (runtime.swarm) store.attachSwarm(runtime.swarm);
     return () => {
       runtime.broker.approvalHandler = undefined;
       runtime.broker.questionHandler = undefined;
+      store.onClear = undefined;
       store.dispose();
     };
-  }, [runtime, store]);
+  }, [runtime, store, stdout]);
 
   const quit = useCallback(() => {
     void runtime.dispose().finally(() => exit());
@@ -266,70 +274,107 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
     }
   }, [runtime, submit]);
 
-  const items = useMemo(() => [{ id: 0, kind: 'banner' as const }, ...snap.items], [snap.items]);
+  // The transcript is printed once and left to the terminal. When it has to be printed again (a resize, thinking
+  // shown or hidden, /resume), only the newest part is: thousands of entries take seconds to print and freeze
+  // the UI meanwhile. Which part is fixed when the redraw starts; later entries are added below as usual.
+  const staticId = `${staticKey}:${snap.epoch}`;
+  // Recomputed only when a new redraw starts (staticId), not as entries are added.
+  const from = useMemo(() => Math.max(0, snap.items.length - REPRINT_KEEP), [staticId]);
+  const items = useMemo(
+    () => [
+      { id: 0, kind: 'banner' as const },
+      ...(from
+        ? [
+            {
+              id: -1,
+              kind: 'notice' as const,
+              level: 'info' as const,
+              text: `${from} earlier ${from === 1 ? 'entry is' : 'entries are'} not shown again. /export saves the whole conversation.`,
+            },
+          ]
+        : []),
+      ...(from ? snap.items.slice(from) : snap.items),
+    ],
+    [snap.items, from],
+  );
   const dialogOpen = !!(approval || question || overlay);
   const busy = snap.live.some((a) => a.running);
+  const { rows } = useWindowSize();
+  // Everything under the transcript is redrawn on each frame, and a frame as tall as the window scrolls its top
+  // lines into the terminal's history on every redraw: that is what repeated text in scrollback is. The parts
+  // below estimate their own heights, but wrapped lines, markdown and dialogs can still add up; this cap makes
+  // it impossible. Taller content is clipped from the top, so the input, footer and newest lines stay visible.
+  const frameRows = Math.max(8, rows - 2);
 
   return (
     <ThemeContext.Provider value={theme}>
-      <Static key={staticKey} items={items}>
+      <Static key={staticId} items={items}>
         {(item) => <ItemView key={item.id} item={item} banner={banner} showThinking={snap.showThinking} />}
       </Static>
-      {/* Panes give way to a one-line roster while a dialog needs the room. */}
-      <LiveArea snap={snap} todos={todos} showPanes={showPanes && !dialogOpen} dialogOpen={dialogOpen} />
-      <Box flexDirection="column" marginTop={1}>
-        {approval ? (
-          <ApprovalDialog req={approval.req} pending={runtime.broker.pending} onResolve={approval.resolve} />
-        ) : question ? (
-          <QuestionDialog
-            key={questionKey(question)}
-            agent={question.agent}
-            question={question.q.question}
-            {...(question.q.options ? { options: question.q.options } : {})}
-            onAnswer={question.resolve}
-            {...(question.opts ? { input: question.opts } : {})}
+      <Box flexDirection="column" maxHeight={frameRows} overflowY="hidden" justifyContent="flex-end">
+        {/* Panes give way to a one-line roster while a dialog needs the room. */}
+        <Box flexDirection="column" flexShrink={0}>
+          <LiveArea snap={snap} todos={todos} showPanes={showPanes && !dialogOpen} dialogOpen={dialogOpen} />
+        </Box>
+        <Box flexDirection="column" marginTop={1} flexShrink={0}>
+          {approval ? (
+            <ApprovalDialog
+              req={approval.req}
+              pending={runtime.broker.pending}
+              onResolve={approval.resolve}
+              maxRows={frameRows - 6} // under it: a gap, the input box (3) and the footer
+            />
+          ) : question ? (
+            <QuestionDialog
+              key={questionKey(question)}
+              agent={question.agent}
+              question={question.q.question}
+              {...(question.q.options ? { options: question.q.options } : {})}
+              onAnswer={question.resolve}
+              {...(question.opts ? { input: question.opts } : {})}
+            />
+          ) : overlay ? (
+            <SelectList
+              title={overlay.title}
+              items={overlay.items}
+              {...(overlay.initial !== undefined ? { initial: overlay.initial } : {})}
+              onSelect={(v) => {
+                setOverlay(null);
+                overlay.onSelect(v as never);
+              }}
+              onCancel={() => {
+                setOverlay(null);
+                overlay.onCancel?.();
+              }}
+            />
+          ) : null}
+          <Input
+            isActive={!dialogOpen}
+            busy={busy}
+            commands={allCommands}
+            history={history}
+            onSubmit={submit}
+            onCycleMode={cycleMode}
+            onToggleThinking={toggleThinkingKey}
+            onInterrupt={interrupt}
+            placeholder={
+              runtime.swarm
+                ? `Message the team (lead: ${runtime.swarm.names[0]}), or @name to address one agent`
+                : busy
+                  ? 'Type to steer the agent…'
+                  : 'Ask anything, or type / for commands'
+            }
           />
-        ) : overlay ? (
-          <SelectList
-            title={overlay.title}
-            items={overlay.items}
-            {...(overlay.initial !== undefined ? { initial: overlay.initial } : {})}
-            onSelect={(v) => {
-              setOverlay(null);
-              overlay.onSelect(v as never);
-            }}
-            onCancel={() => {
-              setOverlay(null);
-              overlay.onCancel?.();
-            }}
+          <Footer
+            mode={mode}
+            effort={effort}
+            sandbox={sandbox}
+            snap={snap}
+            contextWindow={runtime.agent.model.contextWindow}
+            swarmCount={runtime.swarm?.names.length ?? 0}
+            queued={snap.queued}
           />
-        ) : null}
-        <Input
-          isActive={!dialogOpen}
-          busy={busy}
-          commands={allCommands}
-          history={history}
-          onSubmit={submit}
-          onCycleMode={cycleMode}
-          onToggleThinking={() => toggleThinking()}
-          onInterrupt={interrupt}
-          placeholder={
-            runtime.swarm
-              ? `Message the team (lead: ${runtime.swarm.names[0]}), or @name to address one agent`
-              : busy
-                ? 'Type to steer the agent…'
-                : 'Ask anything, or type / for commands'
-          }
-        />
-        <Footer
-          mode={mode}
-          effort={effort}
-          sandbox={sandbox}
-          snap={snap}
-          contextWindow={runtime.agent.model.contextWindow}
-          swarmCount={runtime.swarm?.names.length ?? 0}
-          queued={snap.queued}
-        />
+        </Box>
       </Box>
     </ThemeContext.Provider>
   );

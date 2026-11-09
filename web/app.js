@@ -752,6 +752,9 @@ function renderCards() {
           text: `${a.agentId !== 'main' ? `${a.agentId} needs approval` : 'Approve this action?'}${a.pending > 1 ? ` (${a.pending - 1} more waiting)` : ''}`,
         }),
         h('div', null, h('strong', { text: a.toolName }), ' ', h('span', { text: a.description })),
+        a.command
+          ? h('pre', { class: 'command', text: a.command.split('\n').slice(0, 40).join('\n') })
+          : null,
         h('div', { class: 'reason', text: a.reason }),
         a.preview ? h('pre', null, diffNodes(a.preview.split('\n').slice(0, 60))) : null,
         h(
