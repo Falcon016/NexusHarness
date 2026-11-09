@@ -4,6 +4,24 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Eleven new skills**: an IT admin toolkit (`it-admin`: read-only health snapshot scripts for Linux/macOS and
+  Windows, and playbooks for slow systems, full disks, networks, services and logs, accounts, patching, a security
+  check-up, backups, Docker and Proxmox), `debugging`, `pr-review`, `simplify`, `webapp-testing`,
+  `frontend-design`, `documents` (PDF, Word, Excel, PowerPoint), `mcp-builder`, `init` (AGENTS.md),
+  `resume-work` and `skill-creator`. Skills can now ship extra files that the agent reads only when a step needs
+  them.
+- **The agent can read earlier conversations**: the new `sessions` tool lists, searches and reads the saved
+  sessions for this folder (or all of them), including the current one, so detail a compaction summary dropped is
+  recoverable. `nexus -c` now shows the resumed conversation on screen, `/resume` lists conversations with their
+  last request and takes an id, and listing them no longer reads every file in full.
+- **No more repeated text, and no more slowdowns while a reply streams.** The live area under the transcript is
+  capped below the window height (a taller frame left a copy of itself in scrollback on every redraw, many times a
+  second: the repeated text, and a heavy load on the terminal). A long code block no longer makes streaming
+  quadratic, the screen redraws at most 20 times a second, a resize or `/resume` reprints only the last 250
+  entries, and Node warnings show as notices instead of tearing the screen. `/resume` and `/tree` after a long
+  transcript no longer skip the start of the conversation they bring back.
+- **Approvals show the exact command**, not only the description the model wrote for it (terminal, dashboard and
+  Telegram), and fit small windows.
 - The speed meter stays in the footer on narrow terminals: it now outlasts the effort, sandbox and browser labels
   when the line runs out of room (since the effort label was added it was dropped below about 80 columns).
 - **`/login` and `/logout`**, after pi's: pick a provider, then give it an API key (masked) or an address

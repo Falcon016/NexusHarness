@@ -1,10 +1,9 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseTokenCount } from '../util/text.js';
-import { Session, sessionDir } from '../agent/session.js';
+import { Session } from '../agent/session.js';
 import type { ApprovalMode, SandboxMode } from '../config/schema.js';
 import { trustProject } from '../config/load.js';
-import { projectKey } from '../paths.js';
 import type { LoginTarget, Runtime } from '../runtime.js';
 import { SWARM_PRESETS, type FlushPlan } from '../runtime.js';
 import { assembleTeam, parseTeam, PRESET_SUMMARY, roleByKey, ROLES, type TeamSlot } from '../swarm/roles.js';
@@ -12,6 +11,7 @@ import { checkForUpdate, requestRelaunch, runUpdate, short } from '../update.js'
 import { BIN } from '../version.js';
 import type { AskOptions, Choice } from './dialogs.js';
 import { replayInto, type UiStore } from './store.js';
+import { findSession, listSessions } from '../agent/history.js';
 import { MODE_STYLE } from './theme.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../llm/types.js';
 import {
@@ -789,7 +789,6 @@ export const BUILTINS: BuiltinCommand[] = [
     run(_a, { runtime, store }) {
       if (runtime.agent.isRunning)
         return store.notice('Wait for the current turn to finish (or press esc) first.', 'warn');
-      process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
       runtime.newSession();
       store.clear();
       store.notice('Started a new conversation.');
@@ -810,18 +809,36 @@ export const BUILTINS: BuiltinCommand[] = [
   },
   {
     name: 'resume',
-    description: 'Resume an earlier session in this folder',
-    run(_a, { runtime, store, overlay }) {
-      const list = Session.list(sessionDir(runtime.loaded.paths.data, projectKey(runtime.cwd))).slice(0, 30);
+    usage: 'resume [id|latest]',
+    description: 'Resume an earlier conversation in this folder',
+    run(args, { runtime, store, overlay }) {
+      if (runtime.agent.isRunning)
+        return store.notice('Wait for the current turn to finish (or press esc) first.', 'warn');
+      const open = (file: string) => {
+        const s = Session.load(file);
+        runtime.agent.setSession(s);
+        replayInto(store, s.messages());
+        store.notice(
+          `Resumed session ${s.id}. The agent can look through the others with its sessions tool.`,
+          'success',
+        );
+      };
+      if (args.trim()) {
+        const found = findSession(runtime.history, args.trim());
+        return 'error' in found ? store.notice(found.error, 'warn') : open(found.file);
+      }
+      const list = listSessions(runtime.history, 'project', 30).filter((s) => !s.current);
+      if (!list.length) return store.notice('No earlier conversations in this folder.');
       overlay({
-        title: 'Resume a session',
-        items: list.map((s) => ({ label: s.preview, value: s.file, hint: timeAgo(s.updated) })),
-        onSelect: (file: string) => {
-          const s = Session.load(file);
-          runtime.agent.setSession(s);
-          replayInto(store, s.messages());
-          store.notice(`Resumed session ${s.id}.`, 'success');
-        },
+        title: 'Resume a conversation',
+        items: list.map((s) => ({
+          label: s.first,
+          value: s.file,
+          hint: [timeAgo(s.updated), s.last !== s.first ? `last: ${s.last.slice(0, 40)}` : '']
+            .filter(Boolean)
+            .join(' · '),
+        })),
+        onSelect: open,
       });
     },
   },

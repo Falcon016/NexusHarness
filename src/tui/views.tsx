@@ -379,6 +379,7 @@ export function TodoPanel({ todos, max = 8 }: { todos: TodoItem[]; max?: number 
         <Text
           key={i}
           color={x.status === 'completed' ? t.faint : x.status === 'in_progress' ? t.accent : t.dim}
+          wrap="truncate-end"
           {...(x.status === 'completed' ? { strikethrough: true } : {})}
         >
           {x.status === 'completed' ? '☑' : x.status === 'in_progress' ? '◐' : '☐'} {x.content}
@@ -590,10 +591,10 @@ export function LiveArea({
       {!snap.swarmActive
         ? shownTools.map((x) => (
             <Box key={x.id} flexDirection="column" paddingLeft={1}>
-              <Text>
+              <Text wrap="truncate-end">
                 <Text color={t.accent}>{spin} </Text>
                 <Text bold>{x.name}</Text>
-                <Text color={t.dim}> {x.description === x.name ? '' : x.description}</Text>
+                <Text color={t.dim}> {x.description === x.name ? '' : x.description.split('\n')[0]}</Text>
               </Text>
               {x.output
                 ? tail(x.output.trimEnd(), 3).map((l, i) => (

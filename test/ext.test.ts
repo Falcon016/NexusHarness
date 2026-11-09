@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadExtensions, loadPromptTemplates } from '../src/ext/extensions.js';
 import { connectMcp } from '../src/ext/mcp.js';
 import { BUILTIN_SKILLS_DIR, SkillStore } from '../src/ext/skills.js';
+import { skillTool } from '../src/tools/misc.js';
 import { PolicyEngine } from '../src/policy/engine.js';
 import { GuardSandbox } from '../src/sandbox/guard.js';
 import { testConfig, tmpWorkspace } from './helpers.js';
@@ -83,11 +84,27 @@ describe('built-in skills', () => {
     const store = new SkillStore();
     const warnings = store.load([{ dir: BUILTIN_SKILLS_DIR, source: 'built-in' }]);
     expect(warnings).toEqual([]);
-    expect(store.names().sort()).toEqual(
-      expect.arrayContaining(['pre-commit-review', 'python-env', 'security-review']),
-    );
+    expect(store.names().sort()).toEqual([
+      'debugging',
+      'documents',
+      'frontend-design',
+      'init',
+      'it-admin',
+      'mcp-builder',
+      'pr-review',
+      'pre-commit-review',
+      'python-env',
+      'resume-work',
+      'security-review',
+      'simplify',
+      'skill-creator',
+      'webapp-testing',
+    ]);
     for (const s of store.list()) {
       expect(s.source).toBe('built-in');
+      expect(s.path.replaceAll('\\', '/')).toContain(`/${s.name}/SKILL.md`); // the name matches its folder
+      // Every description sits in every system prompt: keep them short.
+      expect(s.description.length).toBeLessThan(350);
       expect(s.description.length).toBeGreaterThan(40); // the model picks skills by their description
       expect(s.body).toMatch(/## Report/); // each ends with what to tell the user
     }
@@ -104,6 +121,67 @@ describe('built-in skills', () => {
     ]);
     expect(store.get('security-review')).toContain('Mine.');
     expect(store.list().find((s) => s.name === 'security-review')!.source).toBe('user');
+  });
+});
+
+describe('skill files', () => {
+  it("lists a skill's other files when it loads and reads them on request, never outside its folder", async () => {
+    const dir = join(ws.dir, 'skills', 'ops');
+    mkdirSync(join(dir, 'playbooks'), { recursive: true });
+    mkdirSync(join(dir, '.git'));
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      '---\nname: ops\ndescription: Ops runbooks for the team\n---\nRead a playbook.',
+    );
+    writeFileSync(join(dir, 'playbooks', 'dns.md'), '# DNS\nCheck the resolver.');
+    writeFileSync(join(dir, '.git', 'HEAD'), 'ref');
+    writeFileSync(join(ws.dir, 'secret.txt'), 'top secret');
+    const store = new SkillStore();
+    store.load([{ dir: join(ws.dir, 'skills'), source: 'user' }]);
+
+    expect(store.files('ops')).toEqual(['playbooks/dns.md']);
+    const body = store.get('ops')!;
+    expect(body).toContain('Read a playbook.');
+    expect(body).toContain('- playbooks/dns.md');
+    expect(store.file('ops', 'playbooks/dns.md')).toEqual({ text: '# DNS\nCheck the resolver.' });
+    for (const bad of ['../../secret.txt', join(ws.dir, 'secret.txt'), 'playbooks/../../../secret.txt'])
+      expect(store.file('ops', bad)).toHaveProperty('error');
+    expect(store.file('ops', 'nope.md')).toEqual({
+      error: 'No file "nope.md" in skill ops. It has: playbooks/dns.md',
+    });
+
+    // Through the tool, as the agent uses it.
+    const skills = {
+      get: (n: string) => store.get(n),
+      names: () => store.names(),
+      file: (n: string, p: string) => store.file(n, p),
+    };
+    const read = await skillTool.execute({ name: 'ops', file: 'playbooks/dns.md' }, {
+      ...ctx(),
+      skills,
+    } as never);
+    expect(read.content).toBe('# DNS\nCheck the resolver.');
+    const out = await skillTool.execute({ name: 'ops', file: '../../secret.txt' }, {
+      ...ctx(),
+      skills,
+    } as never);
+    expect(out).toMatchObject({ isError: true });
+    expect(out.content).not.toContain('top secret');
+  });
+
+  it('ships the IT admin playbooks and scripts with the skill', () => {
+    const store = new SkillStore();
+    store.load([{ dir: BUILTIN_SKILLS_DIR, source: 'built-in' }]);
+    const files = store.files('it-admin');
+    expect(files).toEqual(
+      expect.arrayContaining(['scripts/snapshot.sh', 'scripts/snapshot.ps1', 'playbooks/network.md']),
+    );
+    // Every playbook the index names exists.
+    const index = store.get('it-admin')!;
+    for (const m of index.matchAll(/`(playbooks\/[a-z-]+\.md)`/g)) expect(files).toContain(m[1]);
+    // And every format the documents skill points at.
+    for (const f of ['pdf', 'docx', 'xlsx', 'pptx'])
+      expect(store.files('documents')).toContain(`formats/${f}.md`);
   });
 });
 

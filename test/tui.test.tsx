@@ -2,6 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { render } from 'ink';
+// The class behind render(): its frame method is patched in one test to measure every frame.
+import Ink from '../node_modules/ink/build/ink.js';
+import { Session } from '../src/agent/session.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { projectKey } from '../src/paths.js';
 import { Runtime } from '../src/runtime.js';
@@ -46,7 +49,7 @@ let mock: Awaited<ReturnType<typeof startMockLlm>>;
 beforeAll(async () => (mock = await startMockLlm()));
 afterAll(() => mock.server.close());
 
-async function boot(mode: 'ask' | 'auto' = 'ask') {
+async function boot(mode: 'ask' | 'auto' = 'ask', size?: { columns: number; rows: number }) {
   const ws = tmpWorkspace();
   const home = join(ws.dir, '.home');
   mkdirSync(join(home, 'config'), { recursive: true });
@@ -69,6 +72,7 @@ async function boot(mode: 'ask' | 'auto' = 'ask') {
   const store = new UiStore();
   const stdin = new FakeTty();
   const stdout = new FakeTty();
+  if (size) Object.assign(stdout, size);
   let out = '';
   stdout.on('data', (d: Buffer) => (out += d.toString()));
   const app = render(<App runtime={runtime} store={store} theme={NEXUS} />, {
@@ -89,9 +93,11 @@ async function boot(mode: 'ask' | 'auto' = 'ask') {
   };
   return {
     runtime,
+    store,
     work,
     stdout,
     raw: () => out,
+    home,
     screen,
     type,
     key: (s: string) => stdin.write(s),
@@ -205,6 +211,104 @@ describe('interactive UI', () => {
       await until(() => ui.screen().includes('Login cancelled; nothing changed.'));
     } finally {
       other.server.close();
+      await ui.stop();
+    }
+  });
+
+  it('never draws a frame as tall as the terminal, however much is live (no copies left in scrollback)', async () => {
+    // A frame as tall as the window scrolls its top into the terminal's history on every redraw: repeated text.
+    const proto = (Ink as unknown as { prototype: Record<string, (...a: unknown[]) => unknown> }).prototype;
+    const original = proto.renderInteractiveFrame!;
+    let tallest = 0;
+    proto.renderInteractiveFrame = function (this: unknown, output: unknown, height: unknown, s: unknown) {
+      tallest = Math.max(tallest, height as number);
+      return original.call(this, output, height, s);
+    };
+    const ui = await boot('ask', { columns: 60, rows: 18 });
+    try {
+      await until(() => ui.screen().includes('NexusHarness'));
+      await ui.type('show me something wide');
+      ui.key('\r');
+      await until(() => ui.screen().includes('That is all.'));
+      await sleep(200);
+      expect(tallest).toBeGreaterThan(10); // the reply did fill the screen
+      expect(tallest).toBeLessThan(18);
+      // An approval for a long script, on the same small terminal.
+      tallest = 0;
+      await ui.type('do the longcmd thing');
+      ui.key('\r');
+      await until(() => ui.screen().includes('Approve this action?'));
+      await sleep(200);
+      expect(ui.screen()).toContain('more lines'); // the script is shortened to fit
+      expect(tallest).toBeLessThan(18);
+      ui.key('n');
+      await until(() => ui.screen().includes('All done'));
+    } finally {
+      proto.renderInteractiveFrame = original;
+      await ui.stop();
+    }
+  });
+
+  it('shows the exact command in an approval, not only the description the model gave it', async () => {
+    const ui = await boot('ask');
+    try {
+      await until(() => ui.screen().includes('NexusHarness'));
+      await ui.type('do something sneaky');
+      ui.key('\r');
+      await until(() => ui.screen().includes('Approve this action?'));
+      await sleep(100);
+      const s = ui.screen();
+      expect(s).toContain('List the files');
+      expect(s).toContain('$ mkdir sneaky-command-runs');
+      ui.key('n');
+      await until(() => ui.screen().includes('All done'));
+    } finally {
+      await ui.stop();
+    }
+  });
+
+  it('/resume shows the whole resumed conversation, however long the transcript before it was', async () => {
+    const ui = await boot('auto');
+    try {
+      await until(() => ui.screen().includes('NexusHarness'));
+      const old = Session.create(ui.work, join(ui.home, 'data', 'sessions', projectKey(ui.work)));
+      old.append({ role: 'user', content: [{ type: 'text', text: 'the first old question' }] });
+      old.append({ role: 'assistant', content: [{ type: 'text', text: 'the first old answer' }] });
+      // More entries on screen now than the resumed conversation has: they used to hide its start.
+      for (let i = 0; i < 12; i++) ui.store.notice(`filler ${i}`);
+      await sleep(100);
+      await ui.type(`/resume ${old.id}`);
+      ui.key('\r');
+      await until(() => ui.screen().includes(`Resumed session ${old.id}`));
+      await sleep(100);
+      const after = plain(ui.raw().slice(ui.raw().lastIndexOf('\x1b[2J')));
+      expect(after).toContain('the first old question');
+      expect(after).toContain('the first old answer');
+      expect(after).not.toContain('filler 3');
+      expect(ui.runtime.agent.session.id).toBe(old.id);
+    } finally {
+      await ui.stop();
+    }
+  });
+
+  it('prints only the newest part of a long transcript again after a resize', async () => {
+    const ui = await boot('auto');
+    try {
+      await until(() => ui.screen().includes('NexusHarness'));
+      for (let i = 0; i < 300; i++) ui.store.notice(`entry number ${i}`);
+      await until(() => ui.screen().includes('entry number 299'));
+      ui.stdout.columns = 100;
+      ui.stdout.emit('resize');
+      await until(
+        () =>
+          ui.raw().lastIndexOf('\x1b[2J') > 0 &&
+          plain(ui.raw().slice(ui.raw().lastIndexOf('\x1b[2J'))).includes('entry number 299'),
+      );
+      const after = plain(ui.raw().slice(ui.raw().lastIndexOf('\x1b[2J')));
+      expect(after).toContain('50 earlier entries are not shown again');
+      expect(after).not.toContain('entry number 10\n');
+      expect(after).toContain('entry number 60');
+    } finally {
       await ui.stop();
     }
   });

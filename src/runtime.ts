@@ -3,7 +3,9 @@ import { dirname, join, resolve } from 'node:path';
 import { Agent, type AgentHooks } from './agent/agent.js';
 import { Broker } from './agent/broker.js';
 import { buildSystemPrompt } from './agent/prompt.js';
+import type { HistorySource } from './agent/history.js';
 import { Session, sessionDir } from './agent/session.js';
+import { sessionsTool } from './tools/sessions.js';
 import { browserTools } from './browser/tools.js';
 import { BrowserService } from './browser/service.js';
 import { AuthStore } from './config/auth.js';
@@ -202,6 +204,7 @@ export class Runtime {
       todoTool,
       askUserTool,
       skillTool,
+      sessionsTool,
     ]) {
       tools.register(t);
     }
@@ -301,9 +304,19 @@ export class Runtime {
         rt.events.emit('todos', t);
       },
       ...(browser ? { browser } : {}),
-      skills: { get: (n) => skills.get(n), names: () => skills.names() },
+      skills: { get: (n) => skills.get(n), names: () => skills.names(), file: (n, p) => skills.file(n, p) },
+      history: rt.history,
     });
     return rt;
+  }
+
+  /** Saved conversations for the `sessions` tool: this folder's, with the one in use marked. */
+  get history(): HistorySource {
+    return {
+      root: join(this.loaded.paths.data, 'sessions'),
+      project: projectKey(this.cwd),
+      currentFile: () => this.agent.session.filePath,
+    };
   }
 
   systemPrompt(agentId: string): string {
@@ -728,7 +741,12 @@ export class Runtime {
             swarm: member,
             ...(cfg.name === this.swarmLead ? { ask: (q: Question) => this.broker.ask(cfg.name, q) } : {}),
             ...(this.browser ? { browser: this.browser } : {}),
-            skills: { get: (n) => this.skills.get(n), names: () => this.skills.names() },
+            skills: {
+              get: (n) => this.skills.get(n),
+              names: () => this.skills.names(),
+              file: (n, p) => this.skills.file(n, p),
+            },
+            history: this.history,
           },
         });
       },

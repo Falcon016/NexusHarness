@@ -17,7 +17,7 @@ import { runRpc } from './modes/rpc.js';
 import { Runtime } from './runtime.js';
 import { setupCommand } from './setup/index.js';
 import { App } from './tui/App.js';
-import { UiStore } from './tui/store.js';
+import { replayInto, UiStore } from './tui/store.js';
 import { pickTheme } from './tui/theme.js';
 import { BIN, NAME, VERSION } from './version.js';
 import { dirname, resolve } from 'node:path';
@@ -331,6 +331,22 @@ async function main(): Promise<number> {
     return 2;
   }
   const store = new UiStore({ printAsStreamed: true });
+  // A resumed conversation (--continue / --resume) is shown, not just loaded for the agent.
+  const resumed = runtime.agent.session.messages();
+  if (resumed.length) {
+    replayInto(store, resumed);
+    store.notice(
+      `Resumed session ${runtime.agent.session.id}. /resume picks another, /clear starts fresh.`,
+      'success',
+    );
+  }
+  // Node prints warnings straight to stderr. Ink cannot account for lines it did not write, so one stray line
+  // throws its redraws off and leaves copies of the live area behind. Show them as notices instead.
+  process.removeAllListeners('warning');
+  process.on('warning', (w) => {
+    if (w.name !== 'DeprecationWarning' && w.name !== 'ExperimentalWarning')
+      store.notice(`${w.name}: ${w.message}`, 'warn');
+  });
   const theme = pickTheme(runtime.config.theme);
   // createElement, not JSX: this entry file must not import React before ./env.js has run (see there).
   const app = render(
@@ -342,6 +358,8 @@ async function main(): Promise<number> {
     }),
     {
       exitOnCtrlC: false,
+      // The store publishes at most 20 times a second; drawing more often only costs CPU.
+      maxFps: 20,
       // We only get here on a real terminal (checked above). Without this, Ink treats a stray CI=true in the
       // environment (dev containers, some IDE shells) as "not interactive" and never draws the live UI.
       interactive: true,

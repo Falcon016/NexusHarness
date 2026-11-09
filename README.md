@@ -29,8 +29,14 @@ It has **no default model**: you pick one, and the harness reads that model's re
   Messages you type meanwhile are queued, not lost. [Details](docs/compaction.md).
 - **Telegram.** `nexus telegram` runs a private bot so you can hand the agent tasks from your phone, with approvals as
   buttons. `nexus setup` connects it and finds your account for you. [Details](docs/telegram.md).
-- **Built-in skills** for repairing Python environments, security reviews and pre-commit checks, loaded only when a
-  task needs them (`/skills` lists them).
+- **Built-in skills**, loaded only when a task needs them (`/skills` lists them): an IT admin toolkit (health
+  snapshot scripts and playbooks for slow machines, full disks, networks, services, accounts, patching, security,
+  backups, Docker and Proxmox), debugging, PR and pre-commit reviews, security review, simplifying recent changes,
+  web app testing, frontend design, office documents and PDFs, MCP servers, Python environments, writing
+  `AGENTS.md`, picking up earlier work, and writing new skills.
+- **It remembers earlier conversations.** Every session is saved, and the agent can list, search and read them with
+  its `sessions` tool: "what did we do yesterday" or a detail a compaction summary dropped is a lookup, not a guess.
+  `nexus -c` and `/resume` bring one back on screen.
 - **Web dashboard you can self-host.** `nexus serve` gives you the whole harness in a browser: sessions, streaming
   chat, approvals, a context meter with the compaction line, swarm roster, live browser view. Token login, loopback by
   default, strict CSP, no external requests. [Details](docs/web.md).
@@ -131,7 +137,7 @@ not report one, 32,768 tokens is assumed and you are told; set `"contextWindows"
 | `/swarm limit [n\|off]`                       | How long a team may work before checking in (saved to your config) |
 | `/swarm config\|resume\|stop\|panes`          | Your saved team; resume or stop a team; toggle split panes         |
 | `/browser [status\|takeover\|release\|close]` | Live browser control                                               |
-| `/tree` · `/resume` · `/clear`                | Branch from an earlier message · resume · start fresh              |
+| `/tree` · `/resume [id]` · `/clear`           | Branch from an earlier message · resume · start fresh              |
 | `/flush [all\|<days>] [everywhere]`           | Delete old saved conversations and swarms (asks first)             |
 | `/thinking [on\|off]` (ctrl+t)                | Show or hide each agent's reasoning                                |
 | `/update`                                     | Update NexusHarness (also `nexus update` in a shell)               |

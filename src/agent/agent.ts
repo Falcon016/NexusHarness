@@ -33,6 +33,8 @@ import {
   syntheticResults,
 } from './context.js';
 import type { Session } from './session.js';
+import type { HistorySource } from './history.js';
+import type { SkillAccess } from '../tools/types.js';
 
 export type AgentEvent =
   | { type: 'turn_start' }
@@ -59,7 +61,10 @@ export type AgentEvent =
 export interface ApprovalRequest {
   agentId: string;
   toolName: string;
+  /** What the model says the call does. Its own words: show `command` too, which is what will really run. */
   description: string;
+  /** The exact command, URL or path the call acts on, when the description is not simply that. */
+  command?: string;
   reason: string;
   risk: string;
   preview?: string;
@@ -95,7 +100,8 @@ export interface AgentServices {
   setTodos?: (todos: TodoItem[]) => void;
   browser?: BrowserService;
   swarm?: SwarmMember;
-  skills?: { get(name: string): string | undefined; names(): string[] };
+  skills?: SkillAccess;
+  history?: HistorySource;
 }
 
 export interface AgentOptions {
@@ -708,6 +714,7 @@ export class Agent {
       ...(s.browser ? { browser: s.browser } : {}),
       ...(s.swarm ? { swarm: s.swarm } : {}),
       ...(s.skills ? { skills: s.skills } : {}),
+      ...(s.history ? { history: s.history } : {}),
     };
   }
 
@@ -770,11 +777,19 @@ export class Agent {
           preview = `(preview unavailable: ${(e as Error).message})`;
         }
         const key = grantKey(tool, input);
+        let command: string | undefined;
+        try {
+          command = tool.primaryArg?.(input as never);
+        } catch {
+          /* no primary argument */
+        }
         const resp = await this.o.approver(
           {
             agentId: this.id,
             toolName: call.name,
             description,
+            // A command's description is the model's own words (bash takes one): show what will really run too.
+            ...(command && tool.risk === 'exec' && command.trim() !== description.trim() ? { command } : {}),
             reason: decision.reason,
             risk: tool.risk,
             ...(preview ? { preview } : {}),

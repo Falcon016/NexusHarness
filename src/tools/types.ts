@@ -4,6 +4,7 @@ import type { Config } from '../config/schema.js';
 import type { ImageData } from '../llm/types.js';
 import type { Sandbox } from '../sandbox/types.js';
 import type { SwarmMember } from '../swarm/types.js';
+import type { HistorySource } from '../agent/history.js';
 
 /** What a tool can do to the world. Drives approval policy. */
 export type ToolRisk = 'read' | 'edit' | 'exec' | 'network' | 'browser' | 'agent';
@@ -27,6 +28,12 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+export interface SkillAccess {
+  get(name: string): string | undefined;
+  names(): string[];
+  file?(name: string, path: string): { text: string } | { error: string };
+}
+
 export interface ToolContext {
   cwd: string;
   signal: AbortSignal;
@@ -42,7 +49,9 @@ export interface ToolContext {
   setTodos?: (todos: TodoItem[]) => void;
   browser?: BrowserService;
   swarm?: SwarmMember;
-  skills?: { get(name: string): string | undefined; names(): string[] };
+  skills?: SkillAccess;
+  /** Saved conversations, for the `sessions` tool. */
+  history?: HistorySource;
 }
 
 export interface Tool<S extends z.ZodType = z.ZodType> {

@@ -1,4 +1,14 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ContentBlock, Message } from '../llm/types.js';
 import { sortableId } from '../util/id.js';
@@ -101,6 +111,10 @@ export class Session {
     return s;
   }
 
+  /**
+   * Saved sessions in `dir`, newest first. Only the start of each file is read (the header and the first
+   * prompt), so listing stays quick however long the conversations are.
+   */
   static list(dir: string): SessionSummary[] {
     if (!existsSync(dir)) return [];
     const out: SessionSummary[] = [];
@@ -108,26 +122,39 @@ export class Session {
       if (!f.endsWith('.jsonl')) continue;
       const file = join(dir, f);
       try {
-        const s = Session.load(file);
-        const first = s
-          .path()
-          .find(
-            (e) =>
-              e.type === 'message' &&
-              e.message.role === 'user' &&
-              e.message.content.some((b) => b.type === 'text'),
-          );
-        const text =
-          first && first.type === 'message'
-            ? first.message.content.find((b) => b.type === 'text')
-            : undefined;
+        const lines = readHead(file).split('\n');
+        const header = JSON.parse(lines[0] ?? '{}') as Partial<Header>;
+        if (header.type !== 'session') continue;
+        let preview: string | undefined;
+        for (const line of lines.slice(1)) {
+          if (!line.includes('"role":"user"')) continue;
+          try {
+            const e = JSON.parse(line) as Entry;
+            const t = e.type === 'message' ? e.message.content.find((b) => b.type === 'text') : undefined;
+            if (t?.type === 'text' && t.text.trim()) {
+              preview = t.text;
+              break;
+            }
+          } catch {
+            /* a line cut where the read stopped */
+          }
+        }
+        if (preview === undefined && statSync(file).size > 64 * 1024) {
+          // The first prompt is longer than the part read (a big paste): read the whole file this once.
+          const first = Session.load(file)
+            .path()
+            .find((e) => e.type === 'message' && e.message.role === 'user');
+          const t =
+            first?.type === 'message' ? first.message.content.find((b) => b.type === 'text') : undefined;
+          if (t?.type === 'text') preview = t.text;
+        }
         out.push({
-          id: s.id,
+          id: header.id ?? f.slice(0, -6),
           file,
-          cwd: s.cwd,
-          ts: s.createdAt,
+          cwd: header.cwd ?? '',
+          ts: header.ts ?? 0,
           updated: statSync(file).mtimeMs,
-          preview: text && text.type === 'text' ? text.text.replace(/\s+/g, ' ').slice(0, 80) : '(empty)',
+          preview: preview ? preview.replace(/\s+/g, ' ').trim().slice(0, 80) : '(empty)',
         });
       } catch {
         /* ignore unreadable files */
@@ -247,6 +274,18 @@ export class Session {
   /** Raw message entries on the current path (ids needed to choose a compaction cut). */
   messageEntries(): Extract<Entry, { type: 'message' }>[] {
     return this.path().filter((e): e is Extract<Entry, { type: 'message' }> => e.type === 'message');
+  }
+}
+
+/** The first 64 KB of a file. */
+function readHead(file: string, bytes = 64 * 1024): string {
+  const fd = openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(bytes);
+    const n = readSync(fd, buf, 0, bytes, 0);
+    return buf.subarray(0, n).toString('utf8');
+  } finally {
+    closeSync(fd);
   }
 }
 

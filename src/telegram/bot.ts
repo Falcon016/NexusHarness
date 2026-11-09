@@ -426,8 +426,9 @@ class ChatSession {
         resolve({ allow: false });
       });
       const preview = req.preview ? `\n<pre>${escapeHtml(truncate(req.preview, 2500))}</pre>` : '';
+      const command = req.command ? `\n<pre>${escapeHtml(truncate(req.command, 1500))}</pre>` : '';
       const text =
-        `<b>Approve?</b> ${escapeHtml(req.description)}\n<i>${escapeHtml(req.reason)}</i>${preview}\n\n` +
+        `<b>Approve?</b> ${escapeHtml(req.description)}${command}\n<i>${escapeHtml(req.reason)}</i>${preview}\n\n` +
         `"Always" allows: ${escapeHtml(req.grantLabel)}. Or reply with text to deny and say what to do instead.`;
       void this.send(async () => {
         const sent = await this.o.api.sendMessage(this.chatId, truncate(text, MAX_MESSAGE), {

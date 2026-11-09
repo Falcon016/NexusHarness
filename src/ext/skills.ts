@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export interface Skill {
@@ -72,8 +72,69 @@ export class SkillStore {
   names(): string[] {
     return [...this.skills.keys()];
   }
+  /**
+   * A skill's instructions. When its folder holds more than SKILL.md (playbooks, scripts, templates), they are
+   * listed at the end, to be read with `file` when a step needs one: a large skill costs context only for the
+   * parts a task uses.
+   */
   get(name: string): string | undefined {
     const s = this.skills.get(name);
-    return s ? `# Skill: ${s.name}\n\n${s.body}` : undefined;
+    if (!s) return undefined;
+    const files = this.files(name);
+    const dir = dirname(s.path);
+    return (
+      `# Skill: ${s.name}\n\n${s.body}` +
+      (files.length
+        ? `\n\n---\nFiles in this skill (read one with the skill tool: name "${s.name}", file "<path>"):\n` +
+          files.map((f) => `- ${f}`).join('\n') +
+          `\nThey are in ${dir}. Run a script from there with bash (for example \`bash "${join(dir, 'scripts', '<script>')}"\`), ` +
+          'or, in the container sandbox where that folder is not mounted, read it and run its text.'
+        : '')
+    );
+  }
+
+  /** Other files in a skill's folder, relative to it (no hidden files, at most 3 levels and 60 files). */
+  files(name: string): string[] {
+    const s = this.skills.get(name);
+    if (!s) return [];
+    const root = dirname(s.path);
+    const out: string[] = [];
+    const walk = (dir: string, depth: number) => {
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        if (out.length >= 60 || e.name.startsWith('.')) continue;
+        const p = join(dir, e.name);
+        if (e.isDirectory() && depth < 3) walk(p, depth + 1);
+        else if (e.isFile() && p !== s.path) out.push(relative(root, p).replaceAll('\\', '/'));
+      }
+    };
+    walk(root, 1);
+    return out;
+  }
+
+  /** One file from a skill's folder. Paths that leave the folder (`..`, absolute, links out) are refused. */
+  file(name: string, path: string): { text: string } | { error: string } {
+    const s = this.skills.get(name);
+    if (!s) return { error: `No skill named "${name}".` };
+    const root = realpathSync(dirname(s.path));
+    const target = resolve(root, path);
+    if (!(target + sep).startsWith(root + sep) && target !== root)
+      return { error: `"${path}" is outside the skill's folder.` };
+    try {
+      if (lstatSync(target).isSymbolicLink() || !realpathSync(target).startsWith(root + sep))
+        return { error: `"${path}" is outside the skill's folder.` };
+      const text = readFileSync(target, 'utf8');
+      return { text: text.length > 60_000 ? `${text.slice(0, 60_000)}\n… (truncated)` : text };
+    } catch {
+      const have = this.files(name);
+      return {
+        error: `No file "${path}" in skill ${name}.${have.length ? ` It has: ${have.join(', ')}` : ''}`,
+      };
+    }
   }
 }
