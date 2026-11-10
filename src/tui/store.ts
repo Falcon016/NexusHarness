@@ -1,3 +1,4 @@
+import { cleanText } from './clean.js';
 import type { AgentEvent } from '../agent/agent.js';
 import { TODO_CHECK, type Agent } from '../agent/agent.js';
 import type { BrowserEvent } from '../browser/service.js';
@@ -227,7 +228,10 @@ export class UiStore {
   // ---- commit helpers -----------------------------------------------------------------------------
 
   push(item: DistributiveOmit<Item, 'id'>): void {
-    this.items = [...this.items, { ...item, id: this.nextId++ } as Item];
+    // Everything that reaches the transcript is cleaned for drawing: see cleanText.
+    const clean: Record<string, unknown> = { ...item };
+    for (const [k, v] of Object.entries(clean)) if (typeof v === 'string') clean[k] = cleanText(v);
+    this.items = [...this.items, { ...clean, id: this.nextId++ } as Item];
     this.publish(true);
   }
   notice(text: string, level: Level = 'info'): void {
@@ -365,19 +369,22 @@ export class UiStore {
         this.streamed.delete(name);
         this.settle.delete(name);
         break;
-      case 'text':
+      case 'text': {
         if (a.thinkingSince && !a.thinkingUntil) a.thinkingUntil = Date.now();
-        a.text += e.delta;
+        const delta = cleanText(e.delta);
+        a.text += delta;
         // Only a chunk with a line break can finish a line. Skipping the rest also matters for speed: searching
         // the reply flattens the string built up chunk by chunk, a copy of all of it each time.
-        if (this.opts.printAsStreamed && !inSwarm && e.delta.includes('\n')) this.printSettled(name, a);
+        if (this.opts.printAsStreamed && !inSwarm && delta.includes('\n')) this.printSettled(name, a);
         break;
+      }
       case 'thinking': {
-        a.thinking += e.delta.length;
+        const delta = cleanText(e.delta);
+        a.thinking += delta.length;
         a.thinkingSince ??= Date.now();
-        a.thought = (a.thought + e.delta).slice(-THOUGHT_TAIL);
+        a.thought = (a.thought + delta).slice(-THOUGHT_TAIL);
         const s = this.streamed.get(name) ?? { printed: false, thought: '' };
-        s.thought += e.delta;
+        s.thought += delta;
         this.streamed.set(name, s);
         break;
       }
@@ -410,15 +417,15 @@ export class UiStore {
         a.tools.push({
           id: e.id,
           name: e.name,
-          description: e.description,
+          description: cleanText(e.description),
           startedAt: Date.now(),
           output: '',
         });
-        a.lastTool = e.description;
+        a.lastTool = cleanText(e.description);
         break;
       case 'tool_progress': {
         const t = a.tools.find((x) => x.id === e.id);
-        if (t) t.output = e.text;
+        if (t) t.output = cleanText(e.text);
         break;
       }
       case 'tool_end': {

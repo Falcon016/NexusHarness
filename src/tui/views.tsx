@@ -1,4 +1,5 @@
-import { Box, Text, useAnimation, useWindowSize } from 'ink';
+import { useDrawSize } from './size.js';
+import { Box, Text, useAnimation } from 'ink';
 import type { ReactNode } from 'react';
 import type { ApprovalMode } from '../config/schema.js';
 import type { TodoItem } from '../tools/types.js';
@@ -56,11 +57,11 @@ export function Keys({ items }: { items: [key: string, what: string][] }) {
  */
 export function Banner({ info }: { info: BannerInfo }) {
   const t = useTheme();
-  const { columns } = useWindowSize();
+  const { columns } = useDrawSize();
   const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
   const cwd = home && info.cwd.startsWith(home) ? '~' + info.cwd.slice(home.length) : info.cwd;
-  // As wide as the input box below it, so the two frames line up.
-  const width = Math.max(40, columns);
+  // As wide as the input box below it, so the two frames line up (and never into the last column).
+  const width = columns;
   const showMascot = t.name !== 'mono' && width >= 72;
   const title = ` ${NAME} `;
   const version = ` v${VERSION} `;
@@ -418,7 +419,7 @@ export function SwarmPanes({
   showThinking: boolean;
 }) {
   const t = useTheme();
-  const { columns, rows } = useWindowSize();
+  const { columns, rows } = useDrawSize();
   // The live area is redrawn in place, which only works while it fits on screen: anything taller scrolls
   // out of reach and every redraw leaves a copy behind. So panes sit side by side, at most a quarter of
   // the window tall, and give way to the one-line roster when there is no room for them.
@@ -509,7 +510,7 @@ export function LiveArea({
   const spin = useSpinner(running);
   const main = snap.live.find((a) => a.name === 'main');
   const started = Math.min(...snap.live.filter((a) => a.running).map((a) => a.startedAt), Date.now());
-  const { columns, rows } = useWindowSize();
+  const { columns, rows } = useDrawSize();
   // Live reasoning: up to a fifth of the window, so the live area always fits on screen.
   const thoughtLines = Math.max(3, Math.min(8, Math.floor(rows / 5)));
   // Everything below the transcript must stay shorter than the window: a taller frame scrolls its top into the
@@ -727,7 +728,7 @@ export function Footer({
   effort?: string | undefined;
 }) {
   const t = useTheme();
-  const { columns } = useWindowSize();
+  const { columns } = useDrawSize();
   const m = MODE_STYLE[mode];
   const pct = Math.min(99, Math.round((snap.contextTokens / contextWindow) * 100));
   const sb = sandbox.split(':')[0]!;

@@ -1,4 +1,5 @@
-import { Box, Static, useApp, useStdout, useWindowSize } from 'ink';
+import { useDrawSize } from './size.js';
+import { Box, Static, useApp, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ApprovalRequest, ApprovalResponse } from '../agent/agent.js';
 import type { ApprovalMode } from '../config/schema.js';
@@ -299,7 +300,7 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
   );
   const dialogOpen = !!(approval || question || overlay);
   const busy = snap.live.some((a) => a.running);
-  const { rows } = useWindowSize();
+  const { columns, rows } = useDrawSize();
   // Everything under the transcript is redrawn on each frame, and a frame as tall as the window scrolls its top
   // lines into the terminal's history on every redraw: that is what repeated text in scrollback is. The parts
   // below estimate their own heights, but wrapped lines, markdown and dialogs can still add up; this cap makes
@@ -308,10 +309,21 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
 
   return (
     <ThemeContext.Provider value={theme}>
+      {/* Both parts are drawn one column narrower than the window: see useDrawSize. */}
       <Static key={staticId} items={items}>
-        {(item) => <ItemView key={item.id} item={item} banner={banner} showThinking={snap.showThinking} />}
+        {(item) => (
+          <Box key={item.id} width={columns} flexDirection="column">
+            <ItemView item={item} banner={banner} showThinking={snap.showThinking} />
+          </Box>
+        )}
       </Static>
-      <Box flexDirection="column" maxHeight={frameRows} overflowY="hidden" justifyContent="flex-end">
+      <Box
+        flexDirection="column"
+        width={columns}
+        maxHeight={frameRows}
+        overflowY="hidden"
+        justifyContent="flex-end"
+      >
         {/* Panes give way to a one-line roster while a dialog needs the room. */}
         <Box flexDirection="column" flexShrink={0}>
           <LiveArea snap={snap} todos={todos} showPanes={showPanes && !dialogOpen} dialogOpen={dialogOpen} />

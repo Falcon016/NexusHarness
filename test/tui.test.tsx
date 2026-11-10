@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { stripVTControlCharacters } from 'node:util';
 import { render } from 'ink';
+import stringWidth from 'string-width';
 // The class behind render(): its frame method is patched in one test to measure every frame.
 import Ink from '../node_modules/ink/build/ink.js';
 import { Session } from '../src/agent/session.js';
@@ -243,6 +245,47 @@ describe('interactive UI', () => {
       expect(tallest).toBeLessThan(18);
       ui.key('n');
       await until(() => ui.screen().includes('All done'));
+    } finally {
+      proto.renderInteractiveFrame = original;
+      await ui.stop();
+    }
+  });
+
+  it('never draws in the last column, and cleans tabs, colours and carriage returns from what it shows', async () => {
+    // On consoles that wrap as soon as the last column is written (the classic Windows console), a full-width
+    // line takes two rows; each redraw then leaves a row behind: repeated text and blank lines in scrollback.
+    const proto = (Ink as unknown as { prototype: Record<string, (...a: unknown[]) => unknown> }).prototype;
+    const original = proto.renderInteractiveFrame!;
+    let widest = 0;
+    let dirty = '';
+    proto.renderInteractiveFrame = function (this: unknown, output: unknown, height: unknown, s: unknown) {
+      for (const part of [output, s])
+        for (const line of String(part ?? '').split('\n')) {
+          widest = Math.max(widest, stringWidth(line));
+          const bare = stripVTControlCharacters(line);
+          if (/[\t\r\x00-\x08\x0b-\x1f]/.test(bare)) dirty ||= JSON.stringify(bare);
+        }
+      return original.call(this, output, height, s);
+    };
+    const ui = await boot('auto', { columns: 70, rows: 24 });
+    try {
+      await until(() => ui.screen().includes('NexusHarness'));
+      await ui.type('show me something messy');
+      ui.key('\r');
+      await until(() => ui.screen().includes('All done'));
+      await ui.type('now tabby please');
+      ui.key('\r');
+      await until(() => ui.screen().includes('Messy done.'));
+      await ui.type('show me something wide');
+      ui.key('\r');
+      await until(() => ui.screen().includes('That is all.'));
+      await sleep(200);
+      expect(widest).toBeGreaterThan(60); // full-width parts were drawn
+      expect(widest).toBeLessThan(70);
+      expect(dirty).toBe('');
+      // Colour codes from the command's output never reach the terminal, and a tab became spaces.
+      expect(ui.raw()).not.toContain('\x1b[31mred');
+      expect(ui.screen()).toMatch(/col col col \d+ +red bold/); // tabs to stops of 4, colours gone
     } finally {
       proto.renderInteractiveFrame = original;
       await ui.stop();
