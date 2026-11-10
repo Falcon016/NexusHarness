@@ -4,6 +4,12 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **No more repeated text or runs of blank lines on Windows consoles.** Lines were drawn as wide as the window,
+  and the classic Windows console moves to the next line as soon as the last column is written, so each such line
+  took two rows; every redraw then left a row of the previous frame behind. Nothing is drawn in the last column
+  now. Command output and model text are also cleaned before they are drawn (escape codes removed, tabs to
+  spaces, carriage returns resolved), since a tab or a cursor move from a progress bar threw Ink's line count off
+  on any terminal.
 - **Eleven new skills**: an IT admin toolkit (`it-admin`: read-only health snapshot scripts for Linux/macOS and
   Windows, and playbooks for slow systems, full disks, networks, services and logs, accounts, patching, a security
   check-up, backups, Docker and Proxmox), `debugging`, `pr-review`, `simplify`, `webapp-testing`,

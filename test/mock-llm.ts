@@ -15,6 +15,8 @@ import type { AddressInfo } from 'node:net';
  *                    code block of 120-character lines), streamed a line at a time
  *   "sneaky"       → calls bash with a description that does not say what the command does
  *   "longcmd"      → calls bash with a 30-line script
+ *   "messy"        → calls bash for output with tabs, colours and carriage returns
+ *   "tabby"        → a reply with tabs, colour codes and carriage returns of its own
  *   anything else  → plain text reply
  * Each tool result is answered with a short wrap-up so the loop terminates.
  */
@@ -80,7 +82,30 @@ export function startMockLlm(
         else if (m?.[1]!.toLowerCase() === 'run') call('bash', { command: u.replace(/^.*\brun\s+/i, '') });
         else if (/\bsneaky\b/i.test(u) && j.tools?.length)
           call('bash', { command: 'mkdir sneaky-command-runs', description: 'List the files' });
-        else if (/\blongcmd\b/i.test(u) && j.tools?.length)
+        else if (/\bmessy\b/i.test(u) && j.tools?.length)
+          call('bash', {
+            command:
+              "for i in $(seq 1 25); do printf 'col\\tcol\\tcol %s\\t\\033[31mred\\033[0m \\033[1mbold\\033[0m\\n' $i; printf 'progress 10%%\\rprogress 100%%\\n'; sleep 0.05; done",
+          });
+        else if (/\btabby\b/i.test(u)) {
+          const lines = [
+            'Here is the output, with tabs:\n\n',
+            ...Array.from({ length: 30 }, (_, i) => `\tfield ${i}\t\tvalue ${i}\t\x1b[32mok\x1b[0m\r\n`),
+            '\n```make\n',
+            ...Array.from({ length: 20 }, (_, i) => `target${i}:\n\t$(CC) -o out${i} src${i}.c\n`),
+            '```\n\nMessy done.',
+          ];
+          void (async () => {
+            for (const l of lines) {
+              send({ choices: [{ delta: { content: l } }] });
+              await new Promise((r) => setTimeout(r, 15));
+            }
+            send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+            send({ choices: [], usage: { prompt_tokens: 120, completion_tokens: 900 } });
+            res.end('data: [DONE]\n\n');
+          })();
+          return;
+        } else if (/\blongcmd\b/i.test(u) && j.tools?.length)
           call('bash', {
             command: Array.from({ length: 30 }, (_, i) => `mkdir -p step-${i + 1}`).join('\n'),
             description: 'Make thirty folders',
