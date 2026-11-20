@@ -11,6 +11,8 @@ export interface GuardOptions {
   cwd: string;
   allowPaths?: string[];
   denyPaths?: string[];
+  /** Readable, never writable. */
+  readOnlyPaths?: string[];
   /** `off` skips path enforcement entirely (used for sandbox.mode = "off"). */
   enforce?: boolean;
 }
@@ -54,6 +56,7 @@ export function isInside(child: string, parent: string): boolean {
 export class GuardSandbox implements Sandbox {
   readonly mode: 'off' | 'guard' = 'guard';
   readonly roots: readonly string[];
+  private readOnly: readonly string[];
   private deny: string[];
   private enforce: boolean;
   private cwd: string;
@@ -66,6 +69,7 @@ export class GuardSandbox implements Sandbox {
       ...(opts.allowPaths ?? []).map((p) => realResolve(p)),
       realResolve(join(tmpdir(), 'nexusharness')),
     ];
+    this.readOnly = (opts.readOnlyPaths ?? []).map((p) => realResolve(p));
     this.deny = opts.denyPaths ?? [];
     if (!this.enforce) this.mode = 'off';
   }
@@ -79,7 +83,8 @@ export class GuardSandbox implements Sandbox {
     const abs = isAbsolute(path) ? resolve(path) : resolve(this.cwd, path);
     const real = realResolve(abs);
 
-    if (this.enforce && !this.roots.some((r) => isInside(real, r))) {
+    const readOnly = access !== 'write' && this.readOnly.some((r) => isInside(real, r));
+    if (this.enforce && !readOnly && !this.roots.some((r) => isInside(real, r))) {
       throw new SandboxError(
         `${access === 'write' ? 'Write' : 'Read'} outside the workspace is blocked by the sandbox: ${path}`,
       );
