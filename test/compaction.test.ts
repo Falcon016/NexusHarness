@@ -419,7 +419,37 @@ describe('events', () => {
     expect(start?.pct).toBeGreaterThanOrEqual(80);
     expect(end?.ok).toBe(true);
     expect(end?.afterPct).toBeLessThan(80);
+    expect(end?.usedTokens).toBeLessThan(start!.usedTokens); // the meter can update at once
     expect(events.filter((e) => e.type === 'queued').length).toBeGreaterThan(0);
+  });
+
+  it('reports the summary as it is written, so a slow local model does not look stuck', async () => {
+    const session = Session.create(ws.dir);
+    fill(session, 6);
+    const p = new AutoProvider(
+      [say('ok')],
+      [
+        { type: 'thinking', delta: 'Let me think about what matters here. '.repeat(3) },
+        { type: 'text', delta: 'Summary: the user and the assistant discussed many numbered topics; ' },
+        { type: 'text', delta: 'no work is pending right now.' },
+        { type: 'done', stopReason: 'end_turn' },
+      ],
+    );
+    const { agent, events } = makeAgent(ws.dir, p, { window: WINDOW, session, tools: readOnly() });
+    await agent.run('go');
+    const progress = events.filter(
+      (e): e is Extract<AgentEvent, { type: 'compaction'; phase: 'progress' }> =>
+        e.type === 'compaction' && e.phase === 'progress',
+    );
+    expect(progress.length).toBeGreaterThan(0);
+    expect(progress[0]).toMatchObject({ part: 1, chars: 0 }); // reading, before anything is written
+    expect(progress.some((e) => e.thinking && e.chars > 0)).toBe(true);
+    expect(progress.some((e) => !e.thinking && e.chars > 0)).toBe(true);
+    expect(progress.every((e) => e.part >= 1 && e.part <= e.parts)).toBe(true);
+    // Ordered: start, progress…, end.
+    const kinds = events.flatMap((e) => (e.type === 'compaction' ? [e.phase] : []));
+    expect(kinds[0]).toBe('start');
+    expect(kinds.at(-1)).toBe('end');
   });
 });
 

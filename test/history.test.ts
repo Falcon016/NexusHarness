@@ -86,7 +86,10 @@ describe('saved conversations', () => {
     expect(findSession(src, 'latest')).toEqual({ file: a.filePath });
     expect(findSession(src, 'current')).toEqual({ file: b.filePath });
     expect(findSession(src, a.id)).toEqual({ file: a.filePath });
-    expect(findSession(src, a.id.slice(0, 10))).toEqual({ file: a.filePath });
+    // The shortest prefix of a's id that b's does not share.
+    let n = 0;
+    while (a.id[n] === b.id[n]) n++;
+    expect(findSession(src, a.id.slice(0, n + 1))).toEqual({ file: a.filePath });
     expect(findSession(src, '../../etc/passwd')).toHaveProperty('error');
     expect(findSession(src, '')).toHaveProperty('error'); // matches both: ambiguous
   });

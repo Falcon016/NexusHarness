@@ -514,7 +514,8 @@ class ChatSession {
       }
       case 'compaction':
         if (e.phase === 'start') this.addLine('Compacting the context…');
-        else if (e.ok) this.addLine(`Context compacted: ${e.beforePct}% → ${e.afterPct}%`);
+        else if (e.phase === 'end' && e.ok)
+          this.addLine(`Context compacted: ${e.beforePct}% → ${e.afterPct}%`);
         break;
       case 'usage':
         if (e.tokensPerSecond) this.speed = e.tokensPerSecond;

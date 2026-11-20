@@ -354,7 +354,8 @@ describe('runtime with the mock server', () => {
       planner.events.on('event', (e) => e.type === 'compaction' && events.push(e.phase));
       sw.say('keep going');
       await sw.idle();
-      expect(events).toEqual(['start', 'end']);
+      expect(events.filter((p) => p !== 'progress')).toEqual(['start', 'end']);
+      expect(events).toContain('progress'); // the summary was reported as it was written
       expect(planner.session.path().some((e) => e.type === 'compaction')).toBe(true);
       expect(planner.session.messageEntries().length).toBeGreaterThanOrEqual(before); // nothing deleted
       expect(planner.session.messages()[0]!.content[0]).toMatchObject({ type: 'text' });

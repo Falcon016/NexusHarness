@@ -292,6 +292,50 @@ describe('interactive UI', () => {
     }
   });
 
+  it('shows the file being written while the model is still writing it', async () => {
+    const ui = await boot('auto');
+    try {
+      await until(() => ui.screen().includes('NexusHarness'));
+      await ui.type('please bigwrite now');
+      ui.key('\r');
+      // While the arguments stream in: what it is doing, which file, how much so far, and the latest lines.
+      await until(() => ui.screen().includes('Writing big.css…'));
+      await until(() => /\.panel-\d+ \{ padding: \d+px; color: navy; \}/.test(ui.screen().slice(-3000)));
+      expect(ui.screen()).toContain('write styles/big.css');
+      expect(ui.screen()).toMatch(/tokens so far/);
+      await until(() => ui.screen().includes('All done'));
+      expect(readFileSync(join(ui.work, 'styles', 'big.css'), 'utf8')).toContain('.panel-59');
+    } finally {
+      await ui.stop();
+    }
+  });
+
+  it('shows a compaction while it runs, then one line saying how it went', async () => {
+    const ui = await boot('auto');
+    try {
+      await until(() => ui.screen().includes('NexusHarness'));
+      // Long replies, so there is plenty for a summary to replace.
+      for (let i = 0; i < 3; i++) {
+        const before = (plain(ui.raw()).match(/That is the whole essay\./g) ?? []).length;
+        await ui.type(`write essay ${i}`.replace('write ', ''));
+        ui.key('\r');
+        await until(() => (plain(ui.raw()).match(/That is the whole essay\./g) ?? []).length > before);
+        await sleep(300);
+      }
+      await ui.type('/compact');
+      ui.key('\r');
+      await until(() => ui.screen().includes('Compacting the conversation…'));
+      await until(() => /reasoning [\d.]+k? tokens/.test(ui.screen().slice(-2000)));
+      await until(() => /summary [\d.]+k? tokens/.test(ui.screen().slice(-2000)));
+      await until(() => ui.screen().includes('Context compacted:'), 8000);
+      const s = plain(ui.raw());
+      expect(s).toMatch(/Context compacted: \d+% → \d+%, \d+ earlier messages summarised in \d+s\./);
+      expect(s).not.toContain('into a summary.'); // one line, not two
+    } finally {
+      await ui.stop();
+    }
+  });
+
   it('shows the exact command in an approval, not only the description the model gave it', async () => {
     const ui = await boot('ask');
     try {

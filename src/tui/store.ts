@@ -52,6 +52,33 @@ export interface LiveAgent {
   lastTool?: string;
   color?: string;
   role?: string;
+  /** What it is doing right now and since when: the activity line under the transcript. */
+  activity?: { kind: ActivityKind; since: number };
+  /** Last time anything came in for it (tokens, tool output): a long silence is worth showing. */
+  activeAt?: number;
+  /** Output of the request in flight so far, in characters: reply, reasoning and tool arguments. */
+  outChars: number;
+  /** A tool call the model is writing now, with what it acts on and the end of what it writes. */
+  drafting?: { id: string; name: string; chars: number; target?: string; tail?: string };
+}
+
+/**
+ * reading: the request is sent and nothing has come back (a local server reads the whole prompt first);
+ * thinking, writing (the reply), drafting (a tool call's arguments), tools (running them).
+ */
+export type ActivityKind = 'reading' | 'thinking' | 'writing' | 'drafting' | 'tools';
+
+/** A compaction in progress: how full the context was, and the summary being written. */
+export interface Compacting {
+  pct: number;
+  since: number;
+  /** Summary written so far, in characters, and whether the model is still reasoning before writing it. */
+  chars: number;
+  thinking: boolean;
+  part: number;
+  parts: number;
+  /** Messages folded into the summary so far. */
+  dropped: number;
 }
 
 export interface UiSnapshot {
@@ -67,7 +94,7 @@ export interface UiSnapshot {
   /** Messages typed while the agent was busy or compacting, not yet delivered. */
   queued: number;
   /** Set while context is being compacted: the chat is paused until it finishes. */
-  compacting?: { pct: number };
+  compacting?: Compacting;
   /** Show agents' reasoning in full (otherwise a one-line "thought for 8s"). */
   showThinking: boolean;
   /** Messages the swarm's agents have sent each other since you last spoke, against the limit (0 = none). */
@@ -96,6 +123,14 @@ export function settledLength(text: string): number {
 }
 
 /** A first line of tool output worth showing under the tool call. */
+/** 45s, 3m 12s, 1h 04m. */
+export function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+}
+
 export function summarize(name: string, r: ToolResult): { summary: string; detail?: string } {
   const text = r.content.trim();
   const lines = text ? text.split('\n') : [];
@@ -157,7 +192,7 @@ export class UiStore {
   private swarmActive = false;
   private status: string | undefined;
   private queued = 0;
-  private compacting: { pct: number } | undefined;
+  private compacting: Compacting | undefined;
   private showThinking = false;
   private swarmBudget: { used: number; limit: number } | undefined;
   private epoch = 0;
@@ -205,7 +240,7 @@ export class UiStore {
         : this.lastSpeed
           ? { speed: { tokensPerSecond: this.lastSpeed, live: false } }
           : {}),
-      ...(this.compacting ? { compacting: this.compacting } : {}),
+      ...(this.compacting ? { compacting: { ...this.compacting } } : {}),
       ...(this.status ? { status: this.status } : {}),
     };
   }
@@ -264,10 +299,26 @@ export class UiStore {
     this.publish(true);
   }
 
+  /** Note a change of what an agent is doing; its clock restarts only when the kind changes. */
+  private setActivity(a: LiveAgent, kind: ActivityKind): void {
+    const now = Date.now();
+    if (a.activity?.kind !== kind) a.activity = { kind, since: now };
+    a.activeAt = now;
+  }
+
   private agentLive(name: string, meta: Partial<LiveAgent> = {}): LiveAgent {
     let a = this.live.get(name);
     if (!a) {
-      a = { name, text: '', thinking: 0, thought: '', tools: [], running: false, startedAt: Date.now() };
+      a = {
+        name,
+        text: '',
+        thinking: 0,
+        thought: '',
+        tools: [],
+        running: false,
+        startedAt: Date.now(),
+        outChars: 0,
+      };
       this.live.set(name, a);
     }
     Object.assign(a, meta);
@@ -366,12 +417,39 @@ export class UiStore {
         a.startedAt = Date.now();
         a.text = '';
         clearThinking(a);
+        delete a.drafting;
+        a.activity = { kind: 'reading', since: Date.now() };
         this.streamed.delete(name);
         this.settle.delete(name);
+        break;
+      case 'request':
+        // Sent: until the first token, a local server is reading the whole prompt (minutes, for a long one).
+        a.activity = { kind: 'reading', since: Date.now() };
+        a.activeAt = Date.now();
+        a.outChars = 0;
+        delete a.drafting;
+        break;
+      case 'tool_call': {
+        if (a.thinkingSince && !a.thinkingUntil) a.thinkingUntil = Date.now();
+        a.outChars += e.chars - (a.drafting?.id === e.id ? a.drafting.chars : 0);
+        a.drafting = {
+          id: e.id,
+          name: e.name,
+          chars: e.chars,
+          ...(e.target ? { target: cleanText(e.target) } : {}),
+          ...(e.tail ? { tail: cleanText(e.tail) } : {}),
+        };
+        this.setActivity(a, 'drafting');
+        break;
+      }
+      case 'context':
+        this.contextTokens = e.tokens;
         break;
       case 'text': {
         if (a.thinkingSince && !a.thinkingUntil) a.thinkingUntil = Date.now();
         const delta = cleanText(e.delta);
+        a.outChars += delta.length;
+        this.setActivity(a, 'writing');
         a.text += delta;
         // Only a chunk with a line break can finish a line. Skipping the rest also matters for speed: searching
         // the reply flattens the string built up chunk by chunk, a copy of all of it each time.
@@ -380,6 +458,8 @@ export class UiStore {
       }
       case 'thinking': {
         const delta = cleanText(e.delta);
+        a.outChars += delta.length;
+        this.setActivity(a, 'thinking');
         a.thinking += delta.length;
         a.thinkingSince ??= Date.now();
         a.thought = (a.thought + delta).slice(-THOUGHT_TAIL);
@@ -411,9 +491,11 @@ export class UiStore {
         a.text = '';
         this.settle.delete(name);
         clearThinking(a);
+        delete a.drafting;
         break;
       }
       case 'tool_start':
+        this.setActivity(a, 'tools');
         a.tools.push({
           id: e.id,
           name: e.name,
@@ -426,6 +508,7 @@ export class UiStore {
       case 'tool_progress': {
         const t = a.tools.find((x) => x.id === e.id);
         if (t) t.output = cleanText(e.text);
+        a.activeAt = Date.now();
         break;
       }
       case 'tool_end': {
@@ -472,14 +555,34 @@ export class UiStore {
         break;
       case 'compaction':
         if (e.phase === 'start') {
-          this.compacting = { pct: e.pct };
-          this.status = `Context at ${e.pct}% — compacting. The chat is paused; anything you type is queued.`;
+          this.compacting = {
+            pct: e.pct,
+            since: Date.now(),
+            chars: 0,
+            thinking: false,
+            part: 0,
+            parts: 0,
+            dropped: 0,
+          };
+          this.contextTokens = e.usedTokens;
+        } else if (e.phase === 'progress') {
+          if (this.compacting)
+            Object.assign(this.compacting, {
+              chars: e.chars,
+              thinking: e.thinking,
+              part: e.part,
+              parts: e.parts,
+            });
         } else {
+          const c = this.compacting;
           this.compacting = undefined;
-          this.status = undefined;
+          this.contextTokens = e.usedTokens;
           if (e.ok)
             this.notice(
-              `Context compacted: ${e.beforePct}% → ${e.afterPct}%. Nothing was lost; the full history stays in the session file.`,
+              `Context compacted: ${e.beforePct}% → ${e.afterPct}%` +
+                (c?.dropped ? `, ${c.dropped} earlier messages summarised` : '') +
+                (c ? ` in ${fmtDuration(Date.now() - c.since)}` : '') +
+                '. Nothing was lost: the full history stays saved, and the agent can look things up in it.',
               'success',
             );
         }
@@ -488,10 +591,13 @@ export class UiStore {
         this.notice(e.reason, 'error');
         break;
       case 'compacted':
-        this.notice(`Compacted ${e.droppedMessages} earlier messages into a summary.`, 'info');
+        if (this.compacting) this.compacting.dropped += e.droppedMessages;
+        else this.notice(`Compacted ${e.droppedMessages} earlier messages into a summary.`, 'info');
         break;
       case 'status':
-        this.setStatus(e.text);
+        // What the agent decided and why ("asking the model to update its task list"): worth keeping in the
+        // transcript. As a label it stuck there until the turn ended, long after it stopped being true.
+        this.notice(e.text, 'info');
         break;
       case 'error':
         this.notice(e.message, 'error');
@@ -501,6 +607,8 @@ export class UiStore {
         a.running = false;
         a.tools = [];
         a.text = '';
+        delete a.activity;
+        delete a.drafting;
         this.settle.delete(name);
         this.status = undefined;
         if (e.stopReason === 'aborted') this.notice(`${inSwarm ? name + ': ' : ''}Interrupted.`, 'warn');

@@ -127,7 +127,11 @@ describe('live area height', () => {
     }
     const stdout = new Tty();
     let out = '';
-    stdout.on('data', (d: Buffer) => (out += d.toString()));
+    const writes: string[] = [];
+    stdout.on('data', (d: Buffer) => {
+      out += d.toString();
+      writes.push(d.toString());
+    });
     const text = [
       'Here is the file:',
       '```ts',
@@ -137,7 +141,16 @@ describe('live area height', () => {
       items: [],
       epoch: 0,
       live: [
-        { name: 'main', text, thinking: 0, thought: '', tools: [], running: true, startedAt: Date.now() },
+        {
+          name: 'main',
+          text,
+          thinking: 0,
+          thought: '',
+          tools: [],
+          running: true,
+          startedAt: Date.now(),
+          outChars: 0,
+        },
       ],
       swarmActive: false,
       browser: { open: false, holder: 'agent' },
@@ -156,8 +169,10 @@ describe('live area height', () => {
       interactive: true,
     });
     await sleep(100);
+    // The live area animates, so Ink may have drawn it more than once: measure the last frame it drew.
+    const last = writes.filter((w) => w.includes('const v119')).at(-1) ?? '';
     app.unmount();
-    const frame = plain(out).trimEnd().split('\n');
+    const frame = plain(last).trim().split('\n');
     // The live area shares the window with the input box and footer, so it must leave room for them too.
     expect(frame.length).toBeLessThan(24 - 5);
     expect(plain(out)).toContain('const v119 = 119;'); // the newest line is what shows

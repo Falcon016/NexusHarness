@@ -4,6 +4,20 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **You can see what the agent is doing while it works.** The line under the live area now says it in words, with
+  a turning star and a shimmer: reading the conversation (with its size), thinking, writing the reply, writing
+  `os.css`, running a command, compacting. It shows how long that step has taken, the tokens so far, the whole
+  turn when it is long, and a warning when the model has gone quiet for 30 seconds. A file being written shows
+  its name, its size so far and its latest lines as they stream in (before, a long write looked like the agent
+  was stuck thinking).
+- **Compaction is visible.** While it runs: how far along the summary is, whether the model is still reasoning,
+  which part of how many. When it ends: one line with before and after, how many messages were summarised and
+  how long it took. The context meter updates as each request goes out, after every tool result and right after
+  a compaction, not only when a reply finishes.
+- **Long task lists get finished.** When the agent stops with items still open after changing things, it is asked
+  to update the list and carry on with the next item (once per run), instead of only to update the list.
+- What the agent reports along the way ("using effort high", "asking the model to update its task list") is kept
+  in the transcript; it used to sit in the status line until the turn ended.
 - **No more repeated text or runs of blank lines on Windows consoles.** Lines were drawn as wide as the window,
   and the classic Windows console moves to the next line as soon as the last column is written, so each such line
   took two rows; every redraw then left a row of the previous frame behind. Nothing is drawn in the last column
