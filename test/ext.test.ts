@@ -93,6 +93,7 @@ describe('built-in skills', () => {
       'mcp-builder',
       'pr-review',
       'pre-commit-review',
+      'prompt-guard',
       'python-env',
       'resume-work',
       'security-review',

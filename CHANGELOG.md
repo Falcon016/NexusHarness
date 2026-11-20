@@ -4,6 +4,8 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **New skill `prompt-guard`:** signs of prompt injection, rules for acting on web pages (no secrets unless asked
+  for that exact site, confirm anything that buys, posts, sends or deletes), and what to do when a page tries it.
 - **You can see what the agent is doing while it works.** The line under the live area now says it in words, with
   a turning star and a shimmer: reading the conversation (with its size), thinking, writing the reply, writing
   `os.css`, running a command, compacting. It shows how long that step has taken, the tokens so far, the whole

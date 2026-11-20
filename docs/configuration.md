@@ -119,6 +119,7 @@ port is also 11434, so if you run llama.cpp there, override `providers.llamacpp.
   | `init`              | Write or refresh `AGENTS.md`                                                          |
   | `resume-work`       | Pick up earlier work from saved conversations, checked against the project            |
   | `skill-creator`     | Write a new skill                                                                     |
+  | `prompt-guard`      | Spot and refuse prompt injection while browsing or reading outside content            |
 
 - Saved conversations: every session is a JSONL file under `<data>/sessions/<project>/`. The agent's `sessions`
   tool lists, searches (tool output included) and reads them, this folder's by default or every folder's with
