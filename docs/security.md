@@ -19,7 +19,6 @@ what it defends against, how, and — just as important — what it does **not**
 | Runaway agent loops / chatter                                             | Iteration cap per turn; swarm message budget that only a human message resets                                                                                                                    |
 | Saved conversations replay an old injection or leak a secret              | The `sessions` tool is read-only, only reads NexusHarness's own session files (ids are matched against the listing, never used as paths), redacts secrets and wraps what it returns as untrusted |
 | A skill's extra files reach outside its folder                            | The skill tool reads only files inside that skill's folder: `..`, absolute paths and symlinks out are refused                                                                                    |
-| The agent reads its saved long outputs                                    | Only the outputs folder is added, read-only: writes there are refused, and saved conversations stay out of the file tools' reach (the `sessions` tool reads those, redacted)                     |
 
 ## What `guard` is — and isn't
 

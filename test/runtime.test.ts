@@ -281,12 +281,6 @@ describe('runtime with the mock server', () => {
       };
       const oldHere = make(here, 'old.jsonl', true);
       const newHere = make(here, 'new.jsonl', false);
-      // Long tool outputs saved for two of them.
-      const outputsOf = (id: string) => join(data, 'outputs', projectKey(rt.cwd), id);
-      for (const id of ['old', 'new']) {
-        mkdirSync(outputsOf(id), { recursive: true });
-        writeFileSync(join(outputsOf(id), '001-call.txt'), 'long output');
-      }
       const oldThere = make(elsewhere, 'old.jsonl', true);
       const current = rt.agent.session.filePath!;
       writeFileSync(current, '{"type":"session"}\n');
@@ -311,29 +305,7 @@ describe('runtime with the mock server', () => {
       expect(done).toMatchObject({ sessions: 2, swarms: 1 });
       expect(existsSync(oldHere) || existsSync(oldThere) || existsSync(swarmDir)).toBe(false);
       expect(existsSync(newHere) && existsSync(current)).toBe(true);
-      expect(existsSync(outputsOf('old'))).toBe(false); // its saved outputs went with it
-      expect(existsSync(outputsOf('new'))).toBe(true);
       expect(existsSync(elsewhere)).toBe(false); // emptied folders are tidied away
-    } finally {
-      await rt.dispose();
-      ws.cleanup();
-    }
-  });
-
-  it('lets the file tools read saved long outputs, and never write there, also after the sandbox is rebuilt', async () => {
-    const { ws, boot } = setup({ model: 'mock/m' });
-    const rt = await boot();
-    try {
-      const saved = join(rt.outputDir, rt.agent.session.id, '001-call.txt');
-      const check = () => {
-        expect(() => rt.sandbox.checkPath(saved, 'read')).not.toThrow();
-        expect(() => rt.sandbox.checkPath(saved, 'write')).toThrow(/blocked/);
-      };
-      check();
-      rt.setSandboxMode('guard'); // a rebuilt sandbox keeps the exception
-      check();
-      // Only that folder: the saved conversations themselves stay out of reach.
-      expect(() => rt.sandbox.checkPath(rt.agent.session.filePath!, 'read')).toThrow(/blocked/);
     } finally {
       await rt.dispose();
       ws.cleanup();

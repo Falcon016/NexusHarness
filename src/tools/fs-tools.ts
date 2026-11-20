@@ -58,8 +58,7 @@ function assertFresh(path: string, current: number, ctx: ToolContext): void {
 export const readTool = defineTool({
   name: 'read',
   description:
-    'Read a file from the workspace. Returns numbered lines. Use offset/limit for large files. Can also read PNG/JPEG/GIF/WebP images. ' +
-    'To read several files, call read for each of them in the same response.',
+    'Read a file from the workspace. Returns numbered lines. Use offset/limit for large files. Can also read PNG/JPEG/GIF/WebP images.',
   risk: 'read',
   parallel: true,
   schema: z.object({
@@ -109,8 +108,7 @@ export const readTool = defineTool({
 export const writeTool = defineTool({
   name: 'write',
   description:
-    'Create a new file, or replace one whose content mostly changes. For existing files you must read them first. ' +
-    'To change part of an existing file use `edit`: rewriting a file means writing every line of it again.',
+    'Create a new file or completely overwrite an existing one. For existing files you must read them first. Prefer `edit` for targeted changes.',
   risk: 'edit',
   schema: z.object({
     path: z.string().describe('File path, absolute or relative to the working directory'),
@@ -142,17 +140,8 @@ export const writeTool = defineTool({
         3,
         `${old === undefined ? 'Created' : 'Updated'} ${input.path}`,
       );
-      // Rewriting a big file to change part of it costs the time to write every line again, which on a local
-      // model can be minutes: say so while it is fresh, so the next change is an edit.
-      const lines = input.content.split('\n').length;
-      const unchanged = lines - d.added;
-      const note =
-        old !== undefined && old.split('\n').length >= 40 && unchanged >= lines * 0.6
-          ? ` Note: ${unchanged} of these ${lines} lines were already there. To change part of a file, use \`edit\` ` +
-            'on just the lines that change: rewriting the whole file means writing every line again.'
-          : '';
       return {
-        content: `${old === undefined ? 'Created' : 'Overwrote'} ${input.path} (+${d.added} -${d.removed}).${note}`,
+        content: `${old === undefined ? 'Created' : 'Overwrote'} ${input.path} (+${d.added} -${d.removed})`,
         display: d.text,
       };
     });

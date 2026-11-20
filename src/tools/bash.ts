@@ -6,12 +6,11 @@ import { truncateHead } from '../util/text.js';
 import { defineTool } from './types.js';
 
 const MAX_BUFFER = 1_000_000;
-/** The agent keeps long output's start and end in the context and saves the rest to a file (see fitOutput). */
-const OUTPUT_LIMIT = 1_000_000;
+const OUTPUT_LIMIT = 30_000;
 
 export const bashTool = defineTool({
   name: 'bash',
-  description: `Run a shell command in the workspace and return its combined output and exit code. Each call is a fresh shell (no state carries over), so use absolute paths or chain with &&. Shell on this machine: ${detectShell().name}. Commands that wait for input will hang until the timeout; pass non-interactive flags. Long output keeps its start and end, and the whole of it is saved to a file you can read or grep.`,
+  description: `Run a shell command in the workspace and return its combined output and exit code. Each call is a fresh shell (no state carries over), so use absolute paths or chain with &&. Shell on this machine: ${detectShell().name}. Commands that wait for input will hang until the timeout; pass non-interactive flags. Output is truncated to the last ${OUTPUT_LIMIT} characters.`,
   risk: 'exec',
   schema: z.object({
     command: z.string().min(1).describe('The command to run'),
