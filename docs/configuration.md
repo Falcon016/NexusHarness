@@ -120,14 +120,7 @@ port is also 11434, so if you run llama.cpp there, override `providers.llamacpp.
   | `resume-work`       | Pick up earlier work from saved conversations, checked against the project            |
   | `skill-creator`     | Write a new skill                                                                     |
   | `prompt-guard`      | Spot and refuse prompt injection while browsing or reading outside content            |
-  | `final-cleanup`     | Remove scratch files, debug code and stray processes once a task is confirmed done    |
 
-- Long tool outputs: a command's output, search results or a page longer than about 6k tokens keeps its start and
-  end in the context, and the whole output is saved under `<data>/outputs/<project>/<session>/`, where the agent's
-  file tools can read or search it (read-only; it goes when `/flush` deletes the conversation). A file read longer
-  than about 13k tokens stops at a line and says which `offset` to read on from. Nothing is cut out for good.
-  Re-reading a file that has not changed, while the earlier read is still in the conversation, returns a short
-  note pointing back to it (once; reading again returns the text).
 - Saved conversations: every session is a JSONL file under `<data>/sessions/<project>/`. The agent's `sessions`
   tool lists, searches (tool output included) and reads them, this folder's by default or every folder's with
   `scope: "all"`; it is read-only, hides secrets it finds, and marks what it returns as data. `nexus -c` and

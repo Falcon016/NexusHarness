@@ -87,7 +87,6 @@ describe('built-in skills', () => {
     expect(store.names().sort()).toEqual([
       'debugging',
       'documents',
-      'final-cleanup',
       'frontend-design',
       'init',
       'it-admin',

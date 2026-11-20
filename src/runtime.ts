@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { Agent, type AgentHooks } from './agent/agent.js';
 import { Broker } from './agent/broker.js';
 import { buildSystemPrompt } from './agent/prompt.js';
@@ -188,9 +188,7 @@ export class Runtime {
     const auth = new AuthStore(paths);
     const registry = new ProviderRegistry(config, auth, env, opts.fetchImpl);
 
-    // Long tool outputs are saved here in full; the agent's file tools may read them, never write them.
-    const outputDir = join(paths.data, 'outputs', projectKey(opts.cwd));
-    const sandbox = createSandbox(config, opts.cwd, [outputDir]);
+    const sandbox = createSandbox(config, opts.cwd);
     const policy = new PolicyEngine({ mode: config.approval.mode, rules: [...config.approval.rules] });
 
     const tools = new ToolRegistry();
@@ -275,7 +273,6 @@ export class Runtime {
       approver: (req, sig) => rt.broker.approver(req, sig),
       system: () => rt.systemPrompt('main'),
       hooks: ext.hooks,
-      outputDir,
     });
     rt = new Runtime(
       opts.cwd,
@@ -311,11 +308,6 @@ export class Runtime {
       history: rt.history,
     });
     return rt;
-  }
-
-  /** Where long tool outputs are saved in full, per conversation (see Agent.fitOutput). */
-  get outputDir(): string {
-    return join(this.loaded.paths.data, 'outputs', projectKey(this.cwd));
   }
 
   /** Saved conversations for the `sessions` tool: this folder's, with the one in use marked. */
@@ -492,9 +484,7 @@ export class Runtime {
   }
 
   setSandboxMode(mode: SandboxMode): void {
-    const next = createSandbox({ ...this.config, sandbox: { ...this.config.sandbox, mode } }, this.cwd, [
-      this.outputDir,
-    ]);
+    const next = createSandbox({ ...this.config, sandbox: { ...this.config.sandbox, mode } }, this.cwd);
     this.sandbox = next;
     this.agent.setSandbox(next);
     if (this.swarm) for (const n of this.swarm.names) this.swarm.agent(n)?.setSandbox(next);
@@ -668,17 +658,7 @@ export class Runtime {
 
   /** Delete what `flushPlan` listed. Returns how much was removed. */
   flush(plan: FlushPlan): { sessions: number; swarms: number; bytes: number } {
-    for (const f of plan.sessions) {
-      rmSync(f, { force: true });
-      // The long tool outputs saved for that conversation go with it.
-      const outputs = join(this.loaded.paths.data, 'outputs', basename(dirname(f)), basename(f, '.jsonl'));
-      rmSync(outputs, { recursive: true, force: true });
-      try {
-        rmdirSync(dirname(outputs));
-      } catch {
-        /* other conversations' outputs are still there */
-      }
-    }
+    for (const f of plan.sessions) rmSync(f, { force: true });
     for (const d of plan.swarms) rmSync(d, { recursive: true, force: true });
     // Tidy up per-folder directories that are now empty.
     for (const p of [...plan.sessions, ...plan.swarms]) {
@@ -757,7 +737,6 @@ export class Runtime {
           approver: (req, sig) => this.broker.approver(req, sig),
           system: () => this.systemPrompt(cfg.name),
           hooks: this.hooks,
-          outputDir: this.outputDir,
           services: {
             swarm: member,
             ...(cfg.name === this.swarmLead ? { ask: (q: Question) => this.broker.ask(cfg.name, q) } : {}),
