@@ -15,6 +15,8 @@ import type { AddressInfo } from 'node:net';
  *                    code block of 120-character lines), streamed a line at a time
  *   "sneaky"       → calls bash with a description that does not say what the command does
  *   "longcmd"      → calls bash with a 30-line script
+ *   "bigwrite"     → writes styles/big.css (60 lines) with a tool call whose arguments stream in over ~3s
+ *   (summaries)    → a compaction request gets ~1s of reasoning, then ~1s of summary
  *   "messy"        → calls bash for output with tabs, colours and carriage returns
  *   "tabby"        → a reply with tabs, colour codes and carriage returns of its own
  *   anything else  → plain text reply
@@ -70,6 +72,28 @@ export function startMockLlm(
         });
         send({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
       };
+      const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      const finish = (stop: string) => {
+        send({ choices: [{ delta: {}, finish_reason: stop }] });
+        send({ choices: [], usage: { prompt_tokens: 500, completion_tokens: 400 } });
+        res.end('data: [DONE]\n\n');
+      };
+      const system = JSON.stringify(j.messages[0]?.content ?? '');
+      if (!j.tools?.length && system.includes('compress')) {
+        // A compaction summary: reasoning first, then the summary, slowly enough to watch.
+        void (async () => {
+          for (let i = 0; i < 12; i++) {
+            send({ choices: [{ delta: { reasoning_content: `Weighing what to keep, step ${i}. ` } }] });
+            await pause(100);
+          }
+          for (let i = 0; i < 12; i++) {
+            send({ choices: [{ delta: { content: `Summary part ${i}: earlier work was discussed. ` } }] });
+            await pause(100);
+          }
+          finish('stop');
+        })();
+        return;
+      }
       if (last.role === 'tool')
         text(`All done. Tool said: ${String(last.content).split('\n')[0]!.slice(0, 80)}`);
       else {
@@ -80,7 +104,32 @@ export function startMockLlm(
         else if (m?.[1]!.toLowerCase() === 'write')
           call('write', { path: m[2], content: 'hello from the mock\n' });
         else if (m?.[1]!.toLowerCase() === 'run') call('bash', { command: u.replace(/^.*\brun\s+/i, '') });
-        else if (/\bsneaky\b/i.test(u) && j.tools?.length)
+        else if (/\bbigwrite\b/i.test(u) && j.tools?.length) {
+          // A large file written slowly: the arguments stream in over a few seconds.
+          const content = Array.from(
+            { length: 60 },
+            (_, i) => `.panel-${i} { padding: ${i}px; color: navy; }`,
+          ).join('\n');
+          const args = JSON.stringify({ path: 'styles/big.css', content });
+          void (async () => {
+            const id = 'call_big';
+            send({
+              choices: [
+                { delta: { tool_calls: [{ index: 0, id, function: { name: 'write', arguments: '' } }] } },
+              ],
+            });
+            for (let i = 0; i < args.length; i += 60) {
+              send({
+                choices: [
+                  { delta: { tool_calls: [{ index: 0, function: { arguments: args.slice(i, i + 60) } }] } },
+                ],
+              });
+              await pause(40);
+            }
+            finish('tool_calls');
+          })();
+          return;
+        } else if (/\bsneaky\b/i.test(u) && j.tools?.length)
           call('bash', { command: 'mkdir sneaky-command-runs', description: 'List the files' });
         else if (/\bmessy\b/i.test(u) && j.tools?.length)
           call('bash', {

@@ -1,4 +1,5 @@
 import { useDrawSize } from './size.js';
+import { ActivityLine } from './activity.js';
 import { Box, Text, useAnimation } from 'ink';
 import type { ReactNode } from 'react';
 import type { ApprovalMode } from '../config/schema.js';
@@ -21,10 +22,6 @@ const fmtTokens = (n: number) =>
     : n >= 1000
       ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k`
       : String(n);
-const elapsed = (ms: number) =>
-  ms < 60_000
-    ? `${Math.floor(ms / 1000)}s`
-    : `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
 
 export interface BannerInfo {
   model: string;
@@ -509,7 +506,6 @@ export function LiveArea({
   const running = snap.live.some((a) => a.running);
   const spin = useSpinner(running);
   const main = snap.live.find((a) => a.name === 'main');
-  const started = Math.min(...snap.live.filter((a) => a.running).map((a) => a.startedAt), Date.now());
   const { columns, rows } = useDrawSize();
   // Live reasoning: up to a fifth of the window, so the live area always fits on screen.
   const thoughtLines = Math.max(3, Math.min(8, Math.floor(rows / 5)));
@@ -523,12 +519,14 @@ export function LiveArea({
       (n, x) => n + 1 + Math.min(3, x.output ? x.output.trimEnd().split('\n').length : 0),
       0,
     ) + (tools.length > shownTools.length ? 1 : 0);
+  const drafting = !snap.swarmActive && main?.running ? main.drafting : undefined;
+  const draftTail = drafting?.tail ? drafting.tail.split('\n').slice(-3) : [];
   const chrome =
-    11 + // input box and its margin, footer, the status line and its margin, the reply's margin, slack
+    11 + // input box and its margin, footer, the activity line and its margin, the reply's margin, slack
     toolRows +
+    (drafting ? 2 + draftTail.length : 0) +
     todoPanelHeight(todos, todoMax) +
-    (snap.browser.open ? 2 : 0) +
-    (snap.compacting ? 2 : 0);
+    (snap.browser.open ? 2 : 0);
   const textRows = dialogOpen ? 3 : Math.max(3, rows - chrome);
   const reply = main?.text ? fitTail(main.text, columns - 6, textRows - 1) : { text: '', hidden: 0 };
 
@@ -609,6 +607,24 @@ export function LiveArea({
           ))
         : null}
 
+      {drafting ? (
+        // A tool call still being written: what it is for, and the end of what it writes so far.
+        <Box flexDirection="column" paddingLeft={1} marginTop={1}>
+          <Text wrap="truncate-end">
+            <Text color={t.accent}>{GLYPH.tool} </Text>
+            <Text bold>{drafting.name}</Text>
+            {drafting.target ? <Text color={t.dim}> {drafting.target}</Text> : null}
+            <Text color={t.faint}> · {fmtTokens(Math.round(drafting.chars / 4))} tokens so far</Text>
+          </Text>
+          {draftTail.map((l, i) => (
+            <Text key={i} color={t.faint} wrap="truncate-end">
+              {'   '}
+              {l || ' '}
+            </Text>
+          ))}
+        </Box>
+      ) : null}
+
       {!snap.swarmActive && tools.length > shownTools.length ? (
         <Text color={t.faint}>
           {'  '}+{tools.length - shownTools.length} more running
@@ -630,25 +646,9 @@ export function LiveArea({
         </Box>
       ) : null}
 
-      {snap.compacting ? (
+      {running || snap.compacting || snap.status ? (
         <Box paddingLeft={1} marginTop={1}>
-          <Text color={t.gold}>
-            Compacting context ({snap.compacting.pct}%): chat paused, your input is queued
-          </Text>
-        </Box>
-      ) : null}
-
-      {running ? (
-        <Box paddingLeft={1} marginTop={1}>
-          <Text color={t.accent}>{spin} </Text>
-          <Text color={t.dim}>
-            {snap.status ?? (main?.thinking && !main.thinkingUntil ? 'Thinking' : 'Working')}…{' '}
-          </Text>
-          <Text color={t.faint}>
-            {elapsed(Date.now() - started)}
-            {'   '}
-          </Text>
-          <Keys items={[['esc', 'interrupt']]} />
+          <ActivityLine snap={snap} />
         </Box>
       ) : null}
     </Box>

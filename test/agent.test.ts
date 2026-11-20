@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Approver } from '../src/agent/agent.js';
+import type { AgentEvent, Approver } from '../src/agent/agent.js';
+import type { StreamEvent } from '../src/llm/types.js';
 import { callTool, makeAgent, say, ScriptedProvider, tmpWorkspace } from './helpers.js';
 
 let ws: ReturnType<typeof tmpWorkspace>;
@@ -158,5 +159,50 @@ describe('agent loop', () => {
     const { agent } = makeAgent(ws.dir, p);
     await agent.run('read');
     expect(JSON.stringify(p.requests[1]!.messages)).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
+  });
+});
+
+describe('what the agent is doing, as it happens', () => {
+  it('reports a tool call while its arguments are still being written, then the context after its result', async () => {
+    const content = Array.from({ length: 40 }, (_, i) => `.rule-${i} { color: blue; }`).join('\n');
+    const args = JSON.stringify({ path: 'css/os.css', content });
+    // A slow model: the arguments arrive in pieces over more than a second.
+    const slow = {
+      id: 'slow',
+      requests: 0,
+      async *stream(): AsyncGenerator<StreamEvent> {
+        if (this.requests++ > 0) {
+          yield { type: 'text', delta: 'Written.' };
+          yield { type: 'done', stopReason: 'end_turn' };
+          return;
+        }
+        yield { type: 'tool_call_start', id: 'w1', name: 'write' };
+        for (let i = 0; i < args.length; i += 100) {
+          yield { type: 'tool_call_delta', id: 'w1', json: args.slice(i, i + 100) };
+          await new Promise((r) => setTimeout(r, 90));
+        }
+        yield { type: 'done', stopReason: 'tool_use' };
+      },
+    };
+    const { agent, events } = makeAgent(ws.dir, slow as never, { mode: 'auto' });
+    await agent.run('write the stylesheet');
+
+    expect(events[1]).toEqual({ type: 'request' }); // after turn_start: sent, nothing back yet
+    expect(events[2]).toMatchObject({ type: 'context' }); // and how big the prompt being read is
+    const drafts = events.filter(
+      (e): e is Extract<AgentEvent, { type: 'tool_call' }> => e.type === 'tool_call',
+    );
+    expect(drafts.length).toBeGreaterThan(2);
+    expect(drafts[0]).toMatchObject({ id: 'w1', name: 'write', chars: 0 });
+    const later = drafts.at(-1)!;
+    expect(later.target).toBe('css/os.css');
+    expect(later.chars).toBeGreaterThan(500);
+    expect(later.tail?.split('\n').length).toBeLessThanOrEqual(3);
+    expect(later.tail).toMatch(/\.rule-\d+ \{ color: blue; \}/);
+    // Reported in order, growing.
+    expect(drafts.map((d) => d.chars)).toEqual([...drafts.map((d) => d.chars)].sort((a, b) => a - b));
+    // Once the result is in, the context the next request will use.
+    const end = events.findIndex((e) => e.type === 'tool_end');
+    expect(events.slice(end).some((e) => e.type === 'context' && e.tokens > 0)).toBe(true);
   });
 });

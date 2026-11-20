@@ -88,9 +88,28 @@ export interface SummariseOptions {
   /** The conversation after the part being summarised, kept verbatim: context only, not to be summarised. */
   after?: Message[] | undefined;
   signal?: AbortSignal | undefined;
+  /** Called as the summary streams in: its size so far, whether the model is still reasoning, which part. */
+  onProgress?: ((p: SummaryProgress) => void) | undefined;
 }
 
-async function ask(o: SummariseOptions, prompt: string, maxTokens: number): Promise<string> {
+export interface SummaryProgress {
+  chars: number;
+  thinking: boolean;
+  part: number;
+  parts: number;
+}
+
+async function ask(
+  o: SummariseOptions,
+  prompt: string,
+  maxTokens: number,
+  part: { part: number; parts: number },
+): Promise<string> {
+  let chars = 0;
+  const report = (thinking: boolean, n: number) => {
+    chars += n;
+    o.onProgress?.({ chars, thinking, ...part });
+  };
   const { message } = await assemble(
     o.provider.stream({
       model: o.model,
@@ -100,6 +119,7 @@ async function ask(o: SummariseOptions, prompt: string, maxTokens: number): Prom
       maxTokens,
       ...(o.signal ? { signal: o.signal } : {}),
     }),
+    { onText: (d) => report(false, d.length), onThinking: (d) => report(true, d.length) },
   );
   return message.content
     .filter((b) => b.type === 'text')
@@ -142,13 +162,15 @@ export async function summarise(messages: Message[], o: SummariseOptions): Promi
   if (cur) chunks.push(cur);
 
   let summary = '';
-  for (const chunk of chunks) {
+  for (const [i, chunk] of chunks.entries()) {
+    const part = { part: i + 1, parts: chunks.length };
+    o.onProgress?.({ chars: 0, thinking: false, ...part });
     const prompt = summary
       ? `Existing summary so far:\n${summary}\n\nMerge in this later part of the conversation:\n${chunk}\n\n${later}${focus}${limit}\nWrite the updated summary now.`
       : `${chunk}\n\n${later}${focus}${limit}\nWrite the summary now.`;
     // Reasoning models can spend the whole budget thinking; retry once with a larger one before giving up.
-    let text = await ask(o, prompt, targetTokens * 2);
-    if (!text) text = await ask(o, prompt, Math.min(targetTokens * 6, Math.floor(window * 0.4)));
+    let text = await ask(o, prompt, targetTokens * 2, part);
+    if (!text) text = await ask(o, prompt, Math.min(targetTokens * 6, Math.floor(window * 0.4)), part);
     if (!text) throw new Error('The model returned an empty summary.');
     summary = text;
   }
@@ -188,6 +210,7 @@ export async function compact(opts: {
   instructions?: string;
   /** Appended to the stored summary as is (the agent's current task list). */
   appendix?: string;
+  onProgress?: (p: SummaryProgress) => void;
 }): Promise<CompactResult | undefined> {
   const plan = planCompaction(opts.session, opts.keepRecent);
   if (!plan) return undefined;
@@ -198,6 +221,7 @@ export async function compact(opts: {
     window: opts.window,
     instructions: opts.instructions,
     after: plan.kept,
+    onProgress: opts.onProgress,
     signal: opts.signal,
   });
   if (summary.length < 20) throw new CompactionError('The summary was too short to be trustworthy.');

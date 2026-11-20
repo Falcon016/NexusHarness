@@ -21,7 +21,7 @@ import { redact } from '../util/redact.js';
 import { estimateTokens, truncateMiddle } from '../util/text.js';
 import type { BrowserService } from '../browser/service.js';
 import type { SwarmMember } from '../swarm/types.js';
-import { compact, CompactionError, type CompactResult } from './compaction.js';
+import { compact, CompactionError, type CompactResult, type SummaryProgress } from './compaction.js';
 import {
   COMPACT_THRESHOLD_MAX,
   danglingToolUseIds,
@@ -34,6 +34,7 @@ import {
 } from './context.js';
 import type { Session } from './session.js';
 import type { HistorySource } from './history.js';
+import { draftInfo } from './draft.js';
 import type { SkillAccess } from '../tools/types.js';
 
 export type AgentEvent =
@@ -49,9 +50,17 @@ export type AgentEvent =
   | { type: 'usage'; usage: Usage; total: Usage; contextTokens: number; tokensPerSecond?: number }
   /** Generation speed while a reply streams (an estimate from the text so far; `usage` has the final figure). */
   | { type: 'speed'; tokensPerSecond: number }
+  /** A request was sent; nothing has come back yet (the server is reading the prompt). */
+  | { type: 'request' }
+  /** A tool call being written: its arguments so far (see draftInfo), reported a few times a second. */
+  | { type: 'tool_call'; id: string; name: string; chars: number; target?: string; tail?: string }
+  /** The context the next request will use, re-estimated after tool results and compaction. */
+  | { type: 'context'; tokens: number }
   | { type: 'compacted'; droppedMessages: number }
   | { type: 'compaction'; phase: 'start'; pct: number; usedTokens: number; windowTokens: number }
-  | { type: 'compaction'; phase: 'end'; ok: boolean; beforePct: number; afterPct: number }
+  /** The summary being written: its size so far, whether the model is still reasoning, which part of how many. */
+  | { type: 'compaction'; phase: 'progress'; chars: number; thinking: boolean; part: number; parts: number }
+  | { type: 'compaction'; phase: 'end'; ok: boolean; beforePct: number; afterPct: number; usedTokens: number }
   | { type: 'queued'; count: number }
   | { type: 'paused'; reason: string }
   | { type: 'status'; text: string }
@@ -222,6 +231,8 @@ export class Agent {
   /** The task list this agent keeps with todo_write, and whether this run did any work / was reminded of it. */
   private todos: TodoItem[] = [];
   private workedThisRun = false;
+  /** This run wrote, edited or ran something (not just read): it is in the middle of the work. */
+  private changedThisRun = false;
   private todoReminded = false;
 
   constructor(private o: AgentOptions) {
@@ -317,6 +328,7 @@ export class Agent {
     }
     this.running = true;
     this.workedThisRun = false;
+    this.changedThisRun = false;
     this.todoReminded = false;
     this.controller = new AbortController();
     const signal = this.controller.signal;
@@ -444,8 +456,11 @@ export class Agent {
       }
 
       if (calls.some((c) => c.name !== 'todo_write')) this.workedThisRun = true;
+      if (calls.some((c) => c.name !== 'todo_write' && (this.o.tools.get(c.name)?.risk ?? 'read') !== 'read'))
+        this.changedThisRun = true;
       const results = await this.runTools(calls, badToolCalls, signal);
       this.o.session.append({ role: 'user', content: results }, this.id);
+      this.emit({ type: 'context', tokens: this.promptTokens() });
       if (signal.aborted) return 'aborted';
     }
     this.emit({ type: 'status', text: `Stopped after ${max} tool iterations. Send a message to continue.` });
@@ -465,8 +480,14 @@ export class Agent {
     return (
       `${TODO_CHECK} Your task list still shows ${open.length} unfinished item${open.length === 1 ? '' : 's'}:\n` +
       `${formatTodos(open)}\n` +
-      'Call todo_write with the complete list so it matches what was actually done: mark finished items completed. ' +
-      'If an item was not done, leave it pending and say so in one short line. Do not repeat your previous answer.'
+      (this.changedThisRun
+        ? // In the middle of the work: finish it rather than stopping with the list half done.
+          'First call todo_write so the list matches what was actually done (mark finished items completed). ' +
+          'If items are still to do and nothing stops you, carry on with the next one now, and keep the list ' +
+          'current as you go. If one cannot be done, leave it pending and say why in one short line. '
+        : 'Call todo_write with the complete list so it matches what was actually done: mark finished items ' +
+          'completed. If an item was not done, leave it pending and say so in one short line. ') +
+      'Do not repeat your previous answer.'
     );
   }
 
@@ -561,6 +582,7 @@ export class Agent {
         ok: compacted,
         beforePct: pct(before),
         afterPct: pct(used),
+        usedTokens: used,
       });
     }
 
@@ -604,6 +626,7 @@ export class Agent {
           keepRecent: keep,
           signal,
           ...(instructions ? { instructions } : {}),
+          onProgress: this.summaryProgress(),
           // The summary replaces the todo_write calls that held the list, so carry the list itself over.
           ...(this.todos.length
             ? {
@@ -618,6 +641,23 @@ export class Agent {
         await new Promise((r) => setTimeout(r, delays[attempt]));
       }
     }
+  }
+
+  /**
+   * Summary progress for UIs: a change of state (reasoning → writing, the next part) at once, the growing size
+   * of the summary a few times a second.
+   */
+  private summaryProgress(): (p: SummaryProgress) => void {
+    let last = 0;
+    let state = '';
+    return (p) => {
+      const t = Date.now();
+      const now = `${p.part}/${p.parts}:${p.thinking}`;
+      if (now === state && t - last < 250) return;
+      state = now;
+      last = t;
+      this.emit({ type: 'compaction', phase: 'progress', ...p });
+    };
   }
 
   /** Manual /compact. Returns false when there was nothing to do or it could not be done. */
@@ -663,8 +703,10 @@ export class Agent {
       ...(effort ? { reasoningEffort: effort } : {}),
       signal,
     });
+    this.emit({ type: 'request' });
+    this.emit({ type: 'context', tokens: used });
     const speed = new SpeedMeter((tps) => this.emit({ type: 'speed', tokensPerSecond: tps }));
-    const r = await assemble(speed.watch(stream), {
+    const r = await assemble(this.watchToolCalls(speed.watch(stream)), {
       onText: (delta) => this.emit({ type: 'text', delta }),
       onThinking: (delta) => this.emit({ type: 'thinking', delta }),
     });
@@ -684,6 +726,30 @@ export class Agent {
       ...(tokensPerSecond ? { tokensPerSecond } : {}),
     });
     return r;
+  }
+
+  /** Report tool calls while their arguments stream in, so a long file write shows what is being written. */
+  private async *watchToolCalls(stream: AsyncIterable<StreamEvent>): AsyncGenerator<StreamEvent> {
+    const calls = new Map<string, { name: string; json: string; shown: number }>();
+    const report = (id: string, c: { name: string; json: string }) =>
+      this.emit({ type: 'tool_call', id, name: c.name, chars: c.json.length, ...draftInfo(c.json) });
+    for await (const e of stream) {
+      if (e.type === 'tool_call_start') {
+        const c = { name: e.name, json: '', shown: Date.now() };
+        calls.set(e.id, c);
+        report(e.id, c);
+      } else if (e.type === 'tool_call_delta') {
+        const c = calls.get(e.id);
+        if (c) {
+          c.json += e.json;
+          if (Date.now() - c.shown >= 250) {
+            c.shown = Date.now();
+            report(e.id, c);
+          }
+        }
+      }
+      yield e;
+    }
   }
 
   /** The configured effort, held to what this model has shown it accepts. */

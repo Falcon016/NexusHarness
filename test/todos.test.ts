@@ -34,7 +34,24 @@ describe('keeping the task list current', () => {
     expect(reminder).toContain('[Task list check]');
     expect(reminder).toContain('[~] step 1');
     expect(reminder).toContain('[ ] step 2');
+    expect(reminder).not.toContain('carry on'); // it only read files: just bring the list up to date
     expect(events.some((e) => e.type === 'turn_end' && e.stopReason === 'end_turn')).toBe(true);
+  });
+
+  it('tells the model to carry on with the list when it stops halfway through changing things', async () => {
+    const p = new AutoProvider([
+      callTool('t1', 'todo_write', plan('completed', 'pending', 'pending')),
+      callTool('w1', 'write', { path: 'a.txt', content: 'one' }),
+      say('Wrote the first file.'), // stops with two items left
+      callTool('w2', 'write', { path: 'b.txt', content: 'two' }),
+      say('Done with the rest.'),
+    ]);
+    const { agent } = makeAgent(ws.dir, p, { tools: tools(), mode: 'auto' });
+    await agent.run('write three files');
+    const reminder = lastUserText(p.calls[3]!);
+    expect(reminder).toContain('[Task list check]');
+    expect(reminder).toContain('carry on with the next one');
+    expect(p.calls).toHaveLength(5); // it did carry on
   });
 
   it('does not remind twice, even if the list is still open', async () => {
