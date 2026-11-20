@@ -19,7 +19,7 @@ export class ContainerSandbox extends GuardSandbox {
   constructor(
     private cwdRoot: string,
     private cfg: ContainerConfig,
-    opts: { allowPaths?: string[]; denyPaths?: string[] } = {},
+    opts: { allowPaths?: string[]; denyPaths?: string[]; readOnlyPaths?: string[] } = {},
   ) {
     super({ cwd: cwdRoot, ...opts });
     this.runtime = cfg.runtime;

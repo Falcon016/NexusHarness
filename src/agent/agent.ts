@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { Config } from '../config/schema.js';
 import { assemble } from '../llm/assemble.js';
 import type { ResolvedModel } from '../llm/registry.js';
@@ -129,7 +132,18 @@ export interface AgentOptions {
   hooks?: AgentHooks;
   /** Delays between compaction retries (tests shorten these). */
   retryDelaysMs?: number[];
+  /**
+   * Where a tool output too long for the context is saved in full (`<dir>/<session id>/…`). The context gets its
+   * start and end and the file's path, so nothing is lost: the agent can read or search the rest. Without it,
+   * long outputs are shortened in the middle.
+   */
+  outputDir?: string;
 }
+
+/** A tool output longer than this (characters, ~6k tokens) is saved to a file, with its start and end kept. */
+const SPILL_AT = 24_000;
+/** A file read longer than this (~13k tokens) is cut at a line, with the offset to read on from. */
+const READ_AT = 48_000;
 
 const OVERFLOW =
   /prompt is too long|context (length|window|size)|maximum context|too many tokens|exceeds the (model|context|available)|input is too long|n_ctx/i;
@@ -212,6 +226,9 @@ export class Agent {
   readonly id: string;
   readonly events = new Emitter<{ event: AgentEvent }>();
   readonly readState = new Map<string, number>();
+  /** Recent file reads, for dedupeRead: what each returned, and which call returned it. */
+  private reads = new Map<string, { hash: string; id: string; skipped: boolean }>();
+  private savedOutputs = 0;
   readonly totalUsage: Usage = { inputTokens: 0, outputTokens: 0 };
   contextTokens = 0;
 
@@ -265,6 +282,7 @@ export class Agent {
   setSession(s: Session): void {
     this.o.session = s;
     this.readState.clear();
+    this.reads.clear();
     this.reported = undefined;
     this.todos = [];
   }
@@ -893,7 +911,12 @@ export class Agent {
         result,
       });
       if (after) result = after;
-      result = { ...result, content: truncateMiddle(redact(result.content), this.toolOutputCap()) };
+      const content = redact(result.content);
+      const fitted = this.fitOutput(p.call.name, p.call.id, content, this.outputLimit(p.call.name));
+      result = {
+        ...result,
+        content: this.dedupeRead(p.call, fitted === content ? fitted : undefined) ?? fitted,
+      };
       results.set(p.call.id, result);
       this.emit({ type: 'tool_end', id: p.call.id, name: p.call.name, result });
     };
@@ -917,6 +940,9 @@ export class Agent {
     const contents = calls.map((c) => (results.get(c.id) ?? { content: 'No result.' }).content);
     const total = contents.reduce((n, c) => n + c.length, 0);
     const share = total > batchCap ? batchCap / total : 1;
+    // Shortened to share the room: these reads are no longer whole in the context, so never point back to them.
+    if (share < 1)
+      for (const [k, r] of this.reads) if (calls.some((c) => c.id === r.id)) this.reads.delete(k);
 
     return calls.map((c, idx): ContentBlock => {
       const r = results.get(c.id) ?? { content: 'No result.', isError: true };
@@ -925,12 +951,110 @@ export class Agent {
         toolUseId: c.id,
         content:
           share < 1
-            ? truncateMiddle(contents[idx]!, Math.max(500, Math.floor(contents[idx]!.length * share)))
+            ? this.fitOutput(
+                c.name,
+                c.id,
+                contents[idx]!,
+                Math.max(1500, Math.floor(contents[idx]!.length * share)),
+              )
             : contents[idx]!,
         ...(r.isError ? { isError: true } : {}),
         ...(r.images?.length ? { images: r.images } : {}),
       };
     });
+  }
+
+  /** How much of one tool's output goes into the context: file reads get more room than logs and pages. */
+  private outputLimit(tool: string): number {
+    return Math.min(this.toolOutputCap(), tool === 'read' ? READ_AT : SPILL_AT);
+  }
+
+  /**
+   * Fit a tool output into `max` characters without losing any of it. A file read is cut at a line, with the
+   * offset to read on from (the file itself holds the rest). Anything else keeps its start and end, and the
+   * whole output is saved to a file the agent can read or search. Only without somewhere to save it is the
+   * middle dropped.
+   */
+  private fitOutput(tool: string, callId: string, content: string, max: number): string {
+    if (content.length <= max) return content;
+    if (tool === 'read') {
+      const lines = content.split('\n');
+      let kept = '';
+      let last = 0;
+      for (const l of lines) {
+        if (kept.length + l.length + 1 > max - 200) break;
+        kept += (kept ? '\n' : '') + l;
+        const n = /^\s*(\d+)\t/.exec(l);
+        if (n) last = Number(n[1]);
+      }
+      if (last)
+        return `${kept}\n… [the rest of this read is not shown, to keep the context small: read on with offset=${last + 1}]`;
+    }
+    const file = this.saveOutput(callId, content);
+    if (!file) return truncateMiddle(content, max);
+    const headMax = Math.floor(max / 3);
+    const tailMax = max - headMax - 300;
+    const head = content.slice(
+      0,
+      content.lastIndexOf('\n', headMax) > 0 ? content.lastIndexOf('\n', headMax) : headMax,
+    );
+    const tailStart = Math.max(
+      head.length,
+      content.indexOf('\n', content.length - tailMax) + 1 || content.length - tailMax,
+    );
+    const hidden = content.slice(head.length, tailStart);
+    const hiddenLines = hidden.split('\n').length - 1;
+    return (
+      `${head}\n… [${hiddenLines} lines (${hidden.length} characters) not shown here. The whole output is saved ` +
+      `in ${file}: read it with offset/limit or search it with grep.]\n${content.slice(tailStart)}`
+    );
+  }
+
+  /** Save a full tool output for later reading; undefined when there is nowhere to save it. */
+  private saveOutput(callId: string, content: string): string | undefined {
+    if (!this.o.outputDir) return undefined;
+    try {
+      const dir = join(this.o.outputDir, this.o.session.id);
+      mkdirSync(dir, { recursive: true });
+      const file = join(
+        dir,
+        `${String(++this.savedOutputs).padStart(3, '0')}-${callId.replace(/[^\w-]/g, '_').slice(0, 40)}.txt`,
+      );
+      writeFileSync(file, content);
+      return file;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * A file read that returns exactly what an earlier read of the same lines returned, while that earlier result
+   * is still in the conversation (not compacted away, not on another branch): a short note instead of the
+   * same text again. Never twice in a row for the same read, so asking again always gets the text.
+   */
+  private dedupeRead(
+    call: Extract<ContentBlock, { type: 'tool_use' }>,
+    content: string | undefined,
+  ): string | undefined {
+    if (call.name !== 'read' || content === undefined) return undefined;
+    const i = call.input as { path?: unknown; offset?: unknown; limit?: unknown };
+    if (typeof i.path !== 'string') return undefined;
+    const key = `${resolve(this.o.cwd, i.path)}|${String(i.offset ?? '')}|${String(i.limit ?? '')}`;
+    const hash = createHash('sha256').update(content).digest('hex');
+    const prev = this.reads.get(key);
+    const stillThere = (id: string) =>
+      this.o.session
+        .messages()
+        .some((m) => m.content.some((b) => b.type === 'tool_result' && b.toolUseId === id && !b.isError));
+    if (prev && prev.hash === hash && !prev.skipped && stillThere(prev.id)) {
+      prev.skipped = true;
+      return (
+        `${i.path} is unchanged since you read it earlier in this conversation (the same lines, identical ` +
+        'content). Use that earlier result. If you need the text repeated, read it again.'
+      );
+    }
+    this.reads.set(key, { hash, id: call.id, skipped: false });
+    return undefined;
   }
 
   /** Largest single tool result (characters) that may enter the context: a slice of the window. */

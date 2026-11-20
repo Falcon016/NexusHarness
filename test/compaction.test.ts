@@ -261,7 +261,8 @@ describe('no data loss and no corrupt conversations', () => {
     await agent.run('read big.txt');
     const result = p.requests[1]!.messages.at(-1)!.content[0]!;
     expect(result.type === 'tool_result' && result.content.length).toBeLessThan(3500);
-    expect(result.type === 'tool_result' && result.content).toContain('truncated');
+    // Cut at a line, with where to read on: nothing is lost.
+    expect(result.type === 'tool_result' && result.content).toMatch(/read on with offset=\d+\]$/);
   });
 });
 

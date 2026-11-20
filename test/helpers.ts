@@ -120,6 +120,8 @@ export function makeAgent(
     window?: number;
     session?: Session;
     config?: Record<string, unknown>;
+    /** Where long tool outputs are saved (readable by the file tools). */
+    outputDir?: string;
   } = {},
 ) {
   const config = testConfig(opts.config ?? {});
@@ -132,11 +134,16 @@ export function makeAgent(
     model: resolved(provider, opts.window),
     tools: opts.tools ?? standardTools(),
     policy,
-    sandbox: new GuardSandbox({ cwd: dir, denyPaths: config.sandbox.denyPaths }),
+    sandbox: new GuardSandbox({
+      cwd: dir,
+      denyPaths: config.sandbox.denyPaths,
+      ...(opts.outputDir ? { readOnlyPaths: [opts.outputDir] } : {}),
+    }),
     session,
     approver: opts.approver ?? (async () => ({ allow: true })),
     system: () => 'test system prompt',
     retryDelaysMs: [0, 0],
+    ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
   });
   const events: AgentEvent[] = [];
   agent.events.on('event', (e) => events.push(e));

@@ -4,6 +4,19 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Less for a local model to read and write, with nothing lost.**
+  - A long command output, search result or page keeps its start and end in the context, and the whole of it is
+    saved to a file the agent can read or grep (before, its middle was cut out for good, and bash kept only the
+    last 30,000 characters).
+  - A very long file read stops at a line, with the offset to read on from.
+  - Reading a file again that has not changed, while the earlier read is still in the conversation, gets a
+    short note instead of the same text (once, and never after a compaction).
+  - Rewriting a big file to change a small part of it now gets a note to use `edit` next time. The tool
+    descriptions and system prompt now say why: every line costs writing again, and every response re-sends the
+    whole conversation, so batch independent reads and searches into one response.
+- **Two new skills:** `prompt-guard` (signs of prompt injection, rules for acting on web pages, what to do when
+  a page tries it) and `final-cleanup` (remove scratch files, debug code and stray processes after a finished
+  task, by exact path, keeping anything in doubt).
 - **You can see what the agent is doing while it works.** The line under the live area now says it in words, with
   a turning star and a shimmer: reading the conversation (with its size), thinking, writing the reply, writing
   `os.css`, running a command, compacting. It shows how long that step has taken, the tokens so far, the whole

@@ -63,9 +63,9 @@ export function buildSystemPrompt(input: PromptInput, override?: string): string
   parts.push(`# Working principles
 - Understand before changing: read the relevant files and search the codebase first. Never guess at file contents.
 - Make the smallest change that fully solves the problem, and match the surrounding code's style and conventions.
-- Prefer the dedicated tools (read, edit, write, grep, glob, ls) over shell equivalents. Use \`edit\` for targeted changes and \`write\` only for new files or full rewrites.
+- Prefer the dedicated tools (read, edit, write, grep, glob, ls) over shell equivalents. Change existing files with \`edit\`, one targeted change at a time; use \`write\` only for new files or when most of a file changes. Rewriting a whole file to change part of it means writing every line again, which is slow.
 - Verify your work: run the project's tests, type checks or linters when they exist, and report real results, including failures. Never claim something works unless you checked.
-- Call independent tools in the same turn so they run in parallel.
+- Batch independent tool calls: when you need several files, searches or listings, request them all in one response (for example three read calls together) rather than one per response. Every response sends the whole conversation to the model again, so fewer, fuller responses are much faster.
 ${input.toolNames.includes('ask_user') ? '- Ask the user (ask_user) only when you are genuinely blocked; otherwise make a sensible assumption and say so.\n' : ''}- Never print, log or commit secrets. If you find credentials in files or output, mention it but do not repeat the values.
 - If a tool call is denied, do not retry it in a different way to get around the restriction; adjust your approach or ask the user.${
     input.toolNames.includes('sessions')

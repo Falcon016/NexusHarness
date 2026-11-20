@@ -33,7 +33,8 @@ It has **no default model**: you pick one, and the harness reads that model's re
   snapshot scripts and playbooks for slow machines, full disks, networks, services, accounts, patching, security,
   backups, Docker and Proxmox), debugging, PR and pre-commit reviews, security review, simplifying recent changes,
   web app testing, frontend design, office documents and PDFs, MCP servers, Python environments, writing
-  `AGENTS.md`, picking up earlier work, and writing new skills.
+  `AGENTS.md`, picking up earlier work, guarding against prompt injection while browsing, cleaning up after a
+  finished task, and writing new skills.
 - **It remembers earlier conversations.** Every session is saved, and the agent can list, search and read them with
   its `sessions` tool: "what did we do yesterday" or a detail a compaction summary dropped is a lookup, not a guess.
   `nexus -c` and `/resume` bring one back on screen.
