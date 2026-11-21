@@ -70,6 +70,8 @@ export interface ModelInfo {
   contextWindow?: number;
   /** llama.cpp router / LM Studio: whether the model is currently loaded in memory. */
   loaded?: boolean;
+  /** False when the server says this model takes no images (llama.cpp started without a vision projector). */
+  vision?: boolean;
 }
 
 export interface Provider {
@@ -77,6 +79,14 @@ export interface Provider {
   stream(req: StreamRequest): AsyncIterable<StreamEvent>;
   listModels?(signal?: AbortSignal): Promise<ModelInfo[]>;
 }
+
+/**
+ * A server refusing a request because it holds an image the model cannot take: llama.cpp without `--mmproj`,
+ * Ollama, LM Studio and vLLM text-only models, OpenAI-compatible APIs whose model has no vision.
+ */
+const NO_VISION =
+  /image input is not supported|\bmmproj\b|(does not|doesn't|do not) support (images?|image input|vision|multimodal)|not a multimodal model|image_url is only supported|images? (are|is) not supported|vision is not (supported|enabled)|multimodal (input )?is not supported/i;
+export const isNoVisionError = (message: string) => NO_VISION.test(message);
 
 export class ProviderError extends Error {
   constructor(

@@ -4,6 +4,13 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **A model that can't see images no longer breaks the session.** When the agent read a screenshot on a
+  llama.cpp model started without its vision projector (`--mmproj`), the server refused the request
+  ("image input is not supported"), and since the image stayed in the conversation every later request failed
+  the same way. Now the refusal is recognised (llama.cpp, LM Studio, vLLM, OpenAI-style), said once, and images
+  are left out of what is sent from then on, with a note telling the model to check visual results another way.
+  The request is not retried three times first, and llama.cpp's `/props` is read at startup so a text-only model
+  is known before any image is sent. Sessions already stuck this way recover on the next message.
 - **New skill `prompt-guard`:** signs of prompt injection, rules for acting on web pages (no secrets unless asked
   for that exact site, confirm anything that buys, posts, sends or deletes), and what to do when a page tries it.
 - **You can see what the agent is doing while it works.** The line under the live area now says it in words, with
