@@ -21,6 +21,11 @@ export interface ResolvedModel {
   effortCap?: ReasoningEffort | 'none';
   /** The most output tokens the provider accepts in one reply, once it has told us (from a rejected request). */
   maxOutput?: number;
+  /**
+   * False once the server has said the model takes no images (at startup, or by refusing one): images are then
+   * left out of what is sent, and the model is told so. Unset means try.
+   */
+  vision?: boolean;
 }
 
 const DEFAULT_CONTEXT = 200_000;
@@ -115,15 +120,18 @@ export class ProviderRegistry {
     try {
       const models = await r.provider.listModels(ctrl.signal);
       const hit = models.find((m) => m.id === r.model || m.aliases?.includes(r.model));
+      const vision = hit?.vision === false ? { vision: false } : {};
       if (hit?.contextWindow)
         return r.contextSource === 'config'
-          ? { ...r, serverWindow: hit.contextWindow }
+          ? { ...r, serverWindow: hit.contextWindow, ...vision }
           : {
               ...r,
               contextWindow: hit.contextWindow,
               contextSource: 'detected',
               serverWindow: hit.contextWindow,
+              ...vision,
             };
+      return { ...r, ...vision };
     } catch {
       /* server unreachable or not reporting: keep the default */
     } finally {

@@ -102,16 +102,19 @@ export class OpenAICompatProvider implements Provider {
     const j = (await res.json()) as { data?: RawModel[] };
     const models: ModelInfo[] = (j.data ?? []).map(toModelInfo);
 
-    // Single-model llama.cpp servers report their window on /props instead of per model.
+    // Single-model llama.cpp servers report their window on /props instead of per model, and whether the
+    // model was given a vision projector.
     const origin = this.baseUrl.replace(/\/v1$/, '');
-    if (models.some((m) => !m.contextWindow)) {
-      const n = await getJson<{ default_generation_settings?: { n_ctx?: number } }>(
-        f,
-        `${origin}/props`,
-        init,
-      );
-      const nctx = n?.default_generation_settings?.n_ctx;
+    const llamacpp = (j.data ?? []).some((m) => m.owned_by === 'llamacpp');
+    if (llamacpp || models.some((m) => !m.contextWindow)) {
+      const props = await getJson<{
+        default_generation_settings?: { n_ctx?: number };
+        modalities?: { vision?: boolean };
+      }>(f, `${origin}/props`, init);
+      const nctx = props?.default_generation_settings?.n_ctx;
       if (nctx && nctx > 0) for (const m of models) m.contextWindow ??= nctx;
+      // One model per server: what /props says is about it. A router's /props describes no model.
+      if (props?.modalities?.vision === false && models.length === 1) models[0]!.vision = false;
     }
     // Ollama reports the context of models currently loaded.
     if (models.some((m) => !m.contextWindow)) {
@@ -131,6 +134,7 @@ export class OpenAICompatProvider implements Provider {
 
 interface RawModel {
   id: string;
+  owned_by?: string;
   aliases?: string[];
   loaded_context_length?: number;
   max_context_length?: number;

@@ -10,7 +10,7 @@ import {
   type StreamEvent,
   type Usage,
 } from '../llm/types.js';
-import { ProviderError } from '../llm/types.js';
+import { isNoVisionError, ProviderError } from '../llm/types.js';
 import type { PolicyEngine } from '../policy/engine.js';
 import { describeGrant, grantKey } from '../policy/engine.js';
 import type { Sandbox } from '../sandbox/types.js';
@@ -28,9 +28,12 @@ import {
   estimateMessages,
   estimateSpecs,
   HARD_LIMIT,
+  hasImages,
+  IMAGE_LEFT_OUT,
   MIN_REPLY_TOKENS,
   sanitizeMessages,
   syntheticResults,
+  withoutImages,
 } from './context.js';
 import type { Session } from './session.js';
 import type { HistorySource } from './history.js';
@@ -188,6 +191,17 @@ export function effortFix(message: string, sent: ReasoningEffort): ReasoningEffo
   )
     return 'high';
   return 'none';
+}
+
+/** Said once when a model turns out to take no images. */
+export function noVisionNotice(model: string, serverMessage: string): string {
+  return (
+    `${model} can't see images, so they are left out of the conversation from now on and the model is told ` +
+    `where one was.` +
+    (/mmproj/i.test(serverMessage)
+      ? ' To give a llama.cpp model vision, start the server with its --mmproj projector file.'
+      : '')
+  );
 }
 
 /** Thrown to end a turn without sending anything further, leaving the conversation intact. */
@@ -407,6 +421,19 @@ export class Agent {
           iter--;
           continue;
         }
+        if (
+          e instanceof ProviderError &&
+          this.o.model.vision !== false &&
+          isNoVisionError(e.message) &&
+          hasImages(this.view())
+        ) {
+          // The model takes no images. Every later request would carry the same one and fail the same way, so
+          // leave images out from now on (the model is told where one was) and ask again.
+          this.o.model.vision = false;
+          this.emit({ type: 'status', text: noVisionNotice(this.o.model.model, e.message) });
+          iter--;
+          continue;
+        }
         const fix = e instanceof ProviderError && e.status === 400 ? outputLimitFix(e.message) : undefined;
         if (fix && outputFixes < 3) {
           // The reply size we asked for was refused: take the provider's real figure and ask again.
@@ -495,7 +522,8 @@ export class Agent {
 
   /** What we send: valid by construction (see sanitizeMessages). */
   private view(): Message[] {
-    return sanitizeMessages(this.o.session.messages());
+    const msgs = sanitizeMessages(this.o.session.messages());
+    return this.o.model.vision === false ? withoutImages(msgs) : msgs;
   }
 
   /** Tokens the next request would use: provider-reported when available, else a conservative estimate. */
@@ -893,6 +921,11 @@ export class Agent {
         result,
       });
       if (after) result = after;
+      if (result.images?.length && this.o.model.vision === false) {
+        // Not kept for later: the model is told now that it cannot see it.
+        const { images: _images, ...rest } = result;
+        result = { ...rest, content: `${result.content}\n${IMAGE_LEFT_OUT}` };
+      }
       result = { ...result, content: truncateMiddle(redact(result.content), this.toolOutputCap()) };
       results.set(p.call.id, result);
       this.emit({ type: 'tool_end', id: p.call.id, name: p.call.name, result });

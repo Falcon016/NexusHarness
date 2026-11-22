@@ -1,4 +1,4 @@
-import { ProviderError } from './types.js';
+import { isNoVisionError, ProviderError } from './types.js';
 
 export interface PostOptions {
   url: string;
@@ -29,7 +29,9 @@ export async function postJsonStream(opts: PostOptions): Promise<Response> {
       });
       if (res.ok) return res;
       const text = await res.text().catch(() => '');
-      const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
+      // A refused image fails the same way every time (llama.cpp answers it with a 500): do not wait to retry it.
+      const retryable =
+        (res.status === 408 || res.status === 429 || res.status >= 500) && !isNoVisionError(text);
       const retryAfter = Number(res.headers.get('retry-after'));
       const err = new ProviderError(
         `HTTP ${res.status}: ${extractMessage(text) || res.statusText}`,

@@ -27,6 +27,37 @@ export function estimateSpecs(tools: ToolSpec[]): number {
   return estimateTokens(JSON.stringify(tools));
 }
 
+/** What the model is told in place of an image it cannot take. */
+export const IMAGE_LEFT_OUT =
+  "[An image was here, but this model can't see images, so it was left out. Check visual results another " +
+  'way: read the page text or DOM, look for console errors, or run a script that prints what you need to know.]';
+
+export const hasImages = (messages: Message[]) =>
+  messages.some((m) =>
+    m.content.some((b) => b.type === 'image' || (b.type === 'tool_result' && !!b.images?.length)),
+  );
+
+/**
+ * The conversation with every image replaced by a note saying it was left out, for a model that takes none.
+ * The saved session keeps them, so a model that can see them later still gets them. Pure.
+ */
+export function withoutImages(messages: Message[]): Message[] {
+  if (!hasImages(messages)) return messages;
+  return messages.map((m) => {
+    if (!m.content.some((b) => b.type === 'image' || (b.type === 'tool_result' && b.images?.length)))
+      return m;
+    const content = m.content.map((b): ContentBlock => {
+      if (b.type === 'image') return { type: 'text', text: IMAGE_LEFT_OUT };
+      if (b.type === 'tool_result' && b.images?.length) {
+        const { images: _images, ...rest } = b;
+        return { ...rest, content: `${b.content}\n${IMAGE_LEFT_OUT}` };
+      }
+      return b;
+    });
+    return { ...m, content } as Message;
+  });
+}
+
 type ToolUse = Extract<ContentBlock, { type: 'tool_use' }>;
 type ToolResult = Extract<ContentBlock, { type: 'tool_result' }>;
 
