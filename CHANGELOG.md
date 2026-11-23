@@ -12,6 +12,8 @@ First release of the ground-up rewrite (replaces the earlier turtlebot harness).
   as a cycle of a few calls) gets a reminder in the tool result, naming the current task and saying not to skip
   it, and again, more firmly, every time round. Polling that sees the result change is not a loop. Rounds spent
   looping do not count toward `maxToolIterations`, so a loop never stops the work.
+- **No tool-call limit by default.** `maxToolIterations` now defaults to `0` (no limit), so long tasks run to the
+  end without stopping to ask you to continue. Set a number (or use `/limits`) to bring a limit back.
 
 - **A model that can't see images no longer breaks the session.** When the agent read a screenshot on a
   llama.cpp model started without its vision projector (`--mmproj`), the server refused the request

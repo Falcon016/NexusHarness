@@ -156,8 +156,12 @@ export const configSchema = z.object({
     .default({ threshold: 0.8, keepRecent: 6 }),
 
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
-  /** Tool calls an agent may make in one turn before it stops and waits for you. 0 means no limit. */
-  maxToolIterations: z.number().int().min(0).default(60),
+  /**
+   * Tool calls an agent may make in one turn before it stops and waits for you. 0 (the default) means no limit:
+   * long tasks run until they are done, with compaction keeping the context in bounds and loop detection keeping
+   * the model moving.
+   */
+  maxToolIterations: z.number().int().min(0).default(0),
   /**
    * Notice the model going round in a loop and get it moving again without stopping the work: a reply that
    * starts repeating itself is cut off and resumed, and repeating the same calls gets a reminder each time.
