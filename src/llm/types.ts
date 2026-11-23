@@ -82,12 +82,27 @@ export interface ModelInfo {
   loaded?: boolean;
   /** False when the server says this model takes no images (llama.cpp started without a vision projector). */
   vision?: boolean;
+  /** Parameter count, when the server reports it (llama.cpp's `meta.n_params`). */
+  params?: number;
+}
+
+/** How busy a model server is right now, from what it reports (llama.cpp: `/slots`, `/props`, `/metrics`). */
+export interface ServerStatus {
+  slotsTotal?: number;
+  slotsBusy?: number;
+  /** Generation speed the server has measured, tokens per second. */
+  tokensPerSecond?: number;
+  /** 0–1. */
+  kvCacheUsage?: number;
+  requestsWaiting?: number;
 }
 
 export interface Provider {
   readonly id: string;
   stream(req: StreamRequest): AsyncIterable<StreamEvent>;
   listModels?(signal?: AbortSignal): Promise<ModelInfo[]>;
+  /** How busy the server is; servers that report nothing give an empty object. */
+  status?(signal?: AbortSignal): Promise<ServerStatus>;
 }
 
 /**

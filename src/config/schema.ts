@@ -47,6 +47,22 @@ export const swarmAgentSchema = z.object({
 });
 export type SwarmAgentConfig = z.infer<typeof swarmAgentSchema>;
 
+export const meshTierSchema = z.enum(['fast', 'standard', 'strong']);
+export type MeshTier = z.infer<typeof meshTierSchema>;
+
+export const meshNodeSchema = z.object({
+  /** Providers (model servers) running on this machine. */
+  providers: z.array(z.string()).default([]),
+  /** Its `nexus node` service, for VRAM, RAM and CPU load: `http://host:7878`. The key is kept with your keys. */
+  agent: z.string().url().optional(),
+  /**
+   * Whether this machine may be sent your conversation and code. False keeps it to tasks the main agent marks
+   * as not sensitive. Tools always run on your own machine; only model requests go to a node.
+   */
+  sensitive: z.boolean().default(true),
+});
+export type MeshNodeConfig = z.infer<typeof meshNodeSchema>;
+
 export const configSchema = z.object({
   /** `<provider>/<model>`. Deliberately has no default: you pick one with `--model` or `/model`. */
   model: z.string().optional(),
@@ -128,6 +144,25 @@ export const configSchema = z.object({
       blockedHosts: z.array(z.string()).default([]),
     })
     .default({ enabled: true, channel: 'chrome', headless: false, allowedHosts: [], blockedHosts: [] }),
+
+  /**
+   * Several machines serving models, used as one: parallel tasks placed on the best free node, small fast models
+   * for easy work and strong ones for hard work, a stronger model when one gets stuck, and another node when
+   * one goes down. See docs/mesh.md.
+   */
+  mesh: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Machines by name. Empty: every configured provider counts as its own node. */
+      nodes: z.record(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,31}$/), meshNodeSchema).default({}),
+      /** How often to check the nodes, in seconds. */
+      probeSeconds: z.number().int().min(5).max(600).default(15),
+      /** Tier per `<provider>/<model>`, where the size-based guess is wrong. */
+      tiers: z.record(z.string(), meshTierSchema).default({}),
+      /** Tasks running at once across the mesh. */
+      maxTasks: z.number().int().min(1).max(16).default(4),
+    })
+    .default({ enabled: false, nodes: {}, probeSeconds: 15, tiers: {}, maxTasks: 4 }),
 
   swarm: z
     .object({

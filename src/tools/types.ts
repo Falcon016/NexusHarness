@@ -5,6 +5,7 @@ import type { ImageData } from '../llm/types.js';
 import type { Sandbox } from '../sandbox/types.js';
 import type { SwarmMember } from '../swarm/types.js';
 import type { HistorySource } from '../agent/history.js';
+import type { MeshService } from '../mesh/tasks.js';
 
 /** What a tool can do to the world. Drives approval policy. */
 export type ToolRisk = 'read' | 'edit' | 'exec' | 'network' | 'browser' | 'agent';
@@ -52,6 +53,8 @@ export interface ToolContext {
   skills?: SkillAccess;
   /** Saved conversations, for the `sessions` tool. */
   history?: HistorySource;
+  /** The machines serving models, for the `task` tool. */
+  mesh?: MeshService;
 }
 
 export interface Tool<S extends z.ZodType = z.ZodType> {

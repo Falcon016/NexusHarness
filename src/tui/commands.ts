@@ -13,6 +13,7 @@ import type { AskOptions, Choice } from './dialogs.js';
 import { replayInto, type UiStore } from './store.js';
 import { findSession, listSessions } from '../agent/history.js';
 import { MODE_STYLE } from './theme.js';
+import { formatNodes } from '../mesh/mesh.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../llm/types.js';
 import {
   builtinUrl,
@@ -432,6 +433,22 @@ export const BUILTINS: BuiltinCommand[] = [
         'Swarm  plain text goes to the lead; @name text addresses one agent; /swarm panes toggles split view',
       ];
       store.notice(lines.join('\n'));
+    },
+  },
+  {
+    name: 'nodes',
+    usage: 'nodes',
+    description: 'The machines serving models: up or down, GPUs, models and how busy',
+    async run(_args, { runtime, store }) {
+      const mesh = runtime.mesh;
+      if (!mesh) {
+        store.notice(
+          `The mesh is off. Add machines with \`${BIN} mesh add\` (docs/mesh.md), or set "mesh": { "enabled": true } to use every configured provider as a node.`,
+        );
+        return;
+      }
+      await mesh.probe();
+      store.notice(formatNodes(mesh.nodes(), (m) => mesh.speedOf(m)));
     },
   },
   {

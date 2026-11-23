@@ -24,6 +24,9 @@ export async function runPrint(runtime: Runtime, opts: PrintOptions): Promise<nu
       process.stderr.write(`▸ ${e.name} ${e.description}\n`);
     } else if (e.type === 'tool_denied') {
       process.stderr.write(`⊘ denied: ${e.reason}\n`);
+    } else if (e.type === 'status') {
+      // Loops stopped, a machine failing over, a stronger model taking over: worth seeing in a headless run.
+      process.stderr.write(`· ${e.text}\n`);
     } else if (e.type === 'error') {
       process.stderr.write(`error: ${e.message}\n`);
     }

@@ -54,6 +54,10 @@ It has **no default model**: you pick one, and the harness reads that model's re
   They message each other, hand off work and share notes; you watch live and can interject (`@builder use the new API`).
   Each member has its own persistent conversation with the same compaction and resume as the main agent, and a whole
   swarm resumes with `/swarm resume`. [Details](docs/swarm.md).
+- **Several machines as one (the mesh).** Point the harness at the model servers on your other machines and it uses
+  them together: parallel `task`s on the best free machine, small fast models for easy work and big ones for hard
+  work, a stronger model when something gets stuck, and another machine when one goes down. `nexus node` reports each
+  machine's GPU, RAM and CPU (read-only, signed). Local only; off until you turn it on. [Details](docs/mesh.md).
 - **Session trees.** Sessions are append-only JSONL trees. `/tree` rewinds to any earlier message and branches without
   losing the original.
 - **Extensible.** TypeScript extensions (tools, slash commands, before/after-tool hooks), skills (`SKILL.md`), prompt
@@ -135,6 +139,7 @@ not report one, 32,768 tokens is assumed and you are told; set `"contextWindows"
 | `/mode [ask\|edits\|auto\|plan]`              | Approval mode                                                      |
 | `/sandbox [off\|guard\|container]`            | Sandbox level                                                      |
 | `/swarm duo\|trio\|quad\|custom`              | Start a team (2, 3 or 4 agents, or one you put together)           |
+| `/nodes`                                      | The machines on the mesh: up or down, GPUs, models, how busy       |
 | `/swarm limit [n\|off]`                       | How long a team may work before checking in (saved to your config) |
 | `/swarm config\|resume\|stop\|panes`          | Your saved team; resume or stop a team; toggle split panes         |
 | `/browser [status\|takeover\|release\|close]` | Live browser control                                               |

@@ -38,6 +38,7 @@ import {
 import type { Session } from './session.js';
 import type { HistorySource } from './history.js';
 import { draftInfo } from './draft.js';
+import type { MeshService } from '../mesh/tasks.js';
 import { ActionWatch, actionLoopNote, watchRepeats, WritingLoop, writingLoopNote } from './loops.js';
 import type { SkillAccess } from '../tools/types.js';
 
@@ -116,6 +117,7 @@ export interface AgentServices {
   swarm?: SwarmMember;
   skills?: SkillAccess;
   history?: HistorySource;
+  mesh?: MeshService;
 }
 
 export interface AgentOptions {
@@ -195,6 +197,21 @@ export function effortFix(message: string, sent: ReasoningEffort): ReasoningEffo
   return 'none';
 }
 
+/** A model server that went away (stopped, crashed, unplugged), as opposed to one that refused the request. */
+export function unreachable(e: unknown): boolean {
+  if (e instanceof ProviderError)
+    return (
+      (e.status === undefined && /^Network error|terminated|ECONNRESET|socket|closed/i.test(e.message)) ||
+      e.status === 502 ||
+      e.status === 503 ||
+      e.status === 504
+    );
+  return (
+    e instanceof Error &&
+    /fetch failed|terminated|ECONNRESET|ECONNREFUSED|socket hang up|other side closed/i.test(e.message)
+  );
+}
+
 /** Said once when a model turns out to take no images. */
 export function noVisionNotice(model: string, serverMessage: string): string {
   return (
@@ -258,6 +275,12 @@ export class Agent {
   private nextRequest: { antiRepeat?: number; thinking?: false } = {};
   /** Set when the latest tool results told the model it is looping (those rounds do not use up the limit). */
   private loopedThisRound = false;
+  /** Stuck badly enough that a stronger model on the mesh should take over, if there is one. */
+  private wantStronger = false;
+  /** The model in use before a stronger one took over, to go back to once the work is moving again. */
+  private escalatedFrom: ResolvedModel | undefined;
+  /** Rounds without a loop since a stronger model took over. */
+  private calmRounds = 0;
 
   constructor(private o: AgentOptions) {
     this.id = o.id;
@@ -285,6 +308,50 @@ export class Agent {
   setModel(m: ResolvedModel): void {
     this.o.model = m;
     this.reported = undefined;
+    // Chosen by the user: no automatic switch back.
+    this.escalatedFrom = undefined;
+  }
+
+  /** A model change the harness made (failover, escalation): the UI is told, the user's choice is not reset. */
+  private switchModel(m: ResolvedModel): void {
+    this.o.model = m;
+    this.reported = undefined;
+    this.o.services?.mesh?.switched?.(this.id, m);
+  }
+
+  /** Move to a stronger model on the mesh after getting stuck, when there is one. */
+  private async escalate(): Promise<void> {
+    this.wantStronger = false;
+    const mesh = this.o.services?.mesh;
+    if (!mesh || this.escalatedFrom) return;
+    const up = await mesh
+      .stronger(this.o.model, this.promptTokens() + MIN_REPLY_TOKENS)
+      .catch(() => undefined);
+    if (!up) return;
+    const from = this.o.model;
+    this.escalatedFrom = from;
+    this.calmRounds = 0;
+    this.switchModel(up.model);
+    this.emit({
+      type: 'status',
+      text:
+        `Stuck on ${from.model}, so ${up.model.model} (${up.why}) is taking over. It reads the conversation once ` +
+        `first; once the work is moving again it goes back to ${from.model}.`,
+    });
+  }
+
+  /** After a stronger model took over: go back once several rounds have passed without a loop. */
+  private settleAfterEscalation(): void {
+    const back = this.escalatedFrom;
+    if (!back) return;
+    if (this.loopedThisRound) {
+      this.calmRounds = 0;
+      return;
+    }
+    if (++this.calmRounds < 6 || !this.o.services?.mesh?.isUp(back)) return;
+    this.escalatedFrom = undefined;
+    this.switchModel(back);
+    this.emit({ type: 'status', text: `The work is moving again; back to ${back.model}.` });
   }
   setSession(s: Session): void {
     this.o.session = s;
@@ -398,8 +465,10 @@ export class Agent {
     let recovered = false;
     let outputFixes = 0;
     let effortFixes = 0;
+    let failovers = 0;
     for (let iter = 0; iter < max; iter++) {
       if (signal.aborted) return 'aborted';
+      if (this.wantStronger) await this.escalate();
       this.drainSteering();
       // The chat is held here, before anything is sent, until the context fits.
       await this.ensureRoom(signal);
@@ -418,6 +487,26 @@ export class Agent {
           this.recoverFromWritingLoop(e);
           iter--;
           continue;
+        }
+        const mesh = this.o.services?.mesh;
+        if (mesh && unreachable(e) && failovers < 3) {
+          // The model server went away: the conversation lives here, so another node can carry it on.
+          const next = await mesh
+            .failover(this.o.model, this.promptTokens() + MIN_REPLY_TOKENS)
+            .catch(() => undefined);
+          if (next) {
+            failovers++;
+            const from = `${this.o.model.providerId}/${this.o.model.model}`;
+            this.switchModel(next.model);
+            this.emit({
+              type: 'status',
+              text:
+                `${from} stopped answering; carrying on with ${next.model.providerId}/${next.model.model} ` +
+                `(${next.why}). It reads the conversation once before replying.`,
+            });
+            iter--;
+            continue;
+          }
         }
         const sent = this.lastEffort;
         const lower =
@@ -507,6 +596,7 @@ export class Agent {
       if (signal.aborted) return 'aborted';
       // Going round a loop is not progress, so it never uses up the tool-call limit and stops the work.
       if (this.loopedThisRound) iter--;
+      this.settleAfterEscalation();
     }
     this.emit({ type: 'status', text: `Stopped after ${max} tool iterations. Send a message to continue.` });
     return 'max_iterations';
@@ -519,6 +609,7 @@ export class Agent {
    */
   private recoverFromWritingLoop(e: WritingLoop): void {
     this.writingLoops++;
+    if (this.writingLoops === 3) this.wantStronger = true;
     if (e.kept.content.length) this.o.session.append(e.kept, this.id);
     this.emit({ type: 'assistant', message: e.kept, cut: true });
     this.o.session.append({ role: 'user', content: [{ type: 'text', text: writingLoopNote(e) }] }, this.id);
@@ -874,6 +965,7 @@ export class Agent {
       ...(s.swarm ? { swarm: s.swarm } : {}),
       ...(s.skills ? { skills: s.skills } : {}),
       ...(s.history ? { history: s.history } : {}),
+      ...(s.mesh ? { mesh: s.mesh } : {}),
     };
   }
 
@@ -998,6 +1090,7 @@ export class Agent {
       if (loop) {
         // Told in the result itself, every time round: nothing is stopped, skipped or undone.
         this.loopedThisRound = true;
+        if (loop.strike === 3) this.wantStronger = true;
         result = { ...result, content: result.content + actionLoopNote(loop, this.currentTask()) };
         const what = safeDescribe(p.tool!, p.input!);
         this.emit({

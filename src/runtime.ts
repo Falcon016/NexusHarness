@@ -31,6 +31,8 @@ import { ToolRegistry } from './tools/registry.js';
 import { globTool, grepTool, lsTool } from './tools/search-tools.js';
 import type { Question, TodoItem } from './tools/types.js';
 import { webFetchTool } from './tools/web.js';
+import { Mesh } from './mesh/mesh.js';
+import { TASK_RULES, TaskRunner, taskTool, type MeshService } from './mesh/tasks.js';
 import { Emitter } from './util/emitter.js';
 import { projectDirIn } from './legacy.js';
 import type { ReasoningEffort } from './llm/types.js';
@@ -213,6 +215,19 @@ export class Runtime {
       ? new BrowserService(config.browser, join(paths.data, 'browser-profile', projectKey(opts.cwd)))
       : undefined;
     if (browser) for (const t of browserTools) tools.register(t);
+    // Several machines serving models, used as one. Nothing of it exists unless it is turned on.
+    const mesh = config.mesh.enabled
+      ? new Mesh({
+          config,
+          provider: (id) => registry.get(id),
+          key: (name) => auth.get(name),
+          ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+        })
+      : undefined;
+    if (mesh) {
+      tools.register(taskTool);
+      warnings.push(...mesh.warnings);
+    }
 
     // Skills, prompt templates and extensions: user-level always; project-level only when trusted.
     const skills = new SkillStore();
@@ -290,6 +305,7 @@ export class Runtime {
       systemOverride,
     );
     rt.warnings = warnings;
+    if (mesh) rt.startMesh(mesh);
     rt.commands = [
       ...loadPromptTemplates([
         join(paths.config, 'prompts'),
@@ -310,6 +326,98 @@ export class Runtime {
     return rt;
   }
 
+  /** The machines serving models, when the mesh is on. */
+  mesh: Mesh | undefined;
+  private meshService: MeshService | undefined;
+  private resolved = new Map<string, Promise<ResolvedModel>>();
+
+  private resolveCached(spec: string): Promise<ResolvedModel> {
+    let p = this.resolved.get(spec);
+    if (!p) {
+      p = this.registry.resolveDetected(spec);
+      p.catch(() => this.resolved.delete(spec));
+      this.resolved.set(spec, p);
+    }
+    return p;
+  }
+
+  private startMesh(mesh: Mesh): void {
+    this.mesh = mesh;
+    const runner = new TaskRunner({
+      mesh,
+      resolve: (spec) => this.resolveCached(spec),
+      makeAgent: (id, model) => this.taskAgent(id, model),
+      protect: () => [
+        `${this.agent.model.providerId}/${this.agent.model.model}`,
+        ...(this.swarm?.names.flatMap((n) => {
+          const m = this.swarm?.agent(n)?.model;
+          return m ? [`${m.providerId}/${m.model}`] : [];
+        }) ?? []),
+      ],
+      maxTasks: this.config.mesh.maxTasks,
+    });
+    const place = async (p: { model: { spec: string }; why: string } | undefined) =>
+      p ? { model: await this.resolveCached(p.model.spec), why: p.why } : undefined;
+    this.meshService = {
+      runTask: (input, ctx) => runner.run(input, ctx),
+      failover: (m, min) => place(mesh.failover(m, min)),
+      stronger: (m, min) => place(mesh.stronger(m, min)),
+      isUp: (m) => mesh.models().some((x) => x.providerId === m.providerId && x.id === m.model),
+      switched: (agentId, m) => {
+        if (agentId === 'main') this.events.emit('model', `${m.providerId}/${m.model}`);
+      },
+    };
+    this.agent.setServices({ mesh: this.meshService });
+    // Speeds measured on real replies, so placement learns which machine is fastest for what.
+    this.agent.events.on('event', (e) => {
+      if (e.type === 'usage' && e.tokensPerSecond)
+        mesh.record(`${this.agent.model.providerId}/${this.agent.model.model}`, e.tokensPerSecond);
+    });
+    mesh.start();
+  }
+
+  /** A helper agent for one task: the main agent's tools without the ones that talk to the user or plan. */
+  private taskAgent(id: string, model: ResolvedModel): Agent {
+    const tools = new ToolRegistry();
+    for (const t of this.tools.all())
+      if (!['task', 'todo_write', 'ask_user'].includes(t.name) && !t.name.startsWith('swarm_'))
+        tools.register(t);
+    const system = buildSystemPrompt(
+      {
+        cwd: this.cwd,
+        configDir: this.loaded.paths.config,
+        mode: this.policy.mode,
+        sandboxDescription: this.sandbox.describe(),
+        toolNames: tools.all().map((t) => t.name),
+        skills: this.skills.list().map((s) => ({ name: s.name, description: s.description })),
+      },
+      this.systemOverride,
+    );
+    return new Agent({
+      id,
+      cwd: this.cwd,
+      config: this.config,
+      model,
+      tools,
+      policy: this.policy,
+      sandbox: this.sandbox,
+      // Thrown away when the task ends: only its report goes back.
+      session: Session.create(this.cwd),
+      approver: (req, sig) => this.broker.approver(req, sig),
+      system: () => `${system}\n\n# Your task\n${TASK_RULES}`,
+      hooks: this.hooks,
+      services: {
+        ...(this.browser ? { browser: this.browser } : {}),
+        skills: {
+          get: (n) => this.skills.get(n),
+          names: () => this.skills.names(),
+          file: (n, p) => this.skills.file(n, p),
+        },
+        history: this.history,
+      },
+    });
+  }
+
   /** Saved conversations for the `sessions` tool: this folder's, with the one in use marked. */
   get history(): HistorySource {
     return {
@@ -322,17 +430,19 @@ export class Runtime {
   systemPrompt(agentId: string): string {
     const swarmInfo = agentId !== 'main' && this.swarm ? this.swarmPromptFor(agentId) : undefined;
     const registry = agentId === 'main' ? this.tools : this.swarmToolsFor(agentId);
-    return buildSystemPrompt(
-      {
-        cwd: this.cwd,
-        configDir: this.loaded.paths.config,
-        mode: this.policy.mode,
-        sandboxDescription: this.sandbox.describe(),
-        toolNames: registry.all().map((t) => t.name),
-        skills: this.skills.list().map((s) => ({ name: s.name, description: s.description })),
-        ...(swarmInfo ? { swarm: swarmInfo } : {}),
-      },
-      this.systemOverride,
+    return (
+      buildSystemPrompt(
+        {
+          cwd: this.cwd,
+          configDir: this.loaded.paths.config,
+          mode: this.policy.mode,
+          sandboxDescription: this.sandbox.describe(),
+          toolNames: registry.all().map((t) => t.name),
+          skills: this.skills.list().map((s) => ({ name: s.name, description: s.description })),
+          ...(swarmInfo ? { swarm: swarmInfo } : {}),
+        },
+        this.systemOverride,
+      ) + (this.mesh && registry.get('task') ? MESH_PROMPT : '')
     );
   }
 
@@ -740,6 +850,7 @@ export class Runtime {
           services: {
             swarm: member,
             ...(cfg.name === this.swarmLead ? { ask: (q: Question) => this.broker.ask(cfg.name, q) } : {}),
+            ...(this.meshService ? { mesh: this.meshService } : {}),
             ...(this.browser ? { browser: this.browser } : {}),
             skills: {
               get: (n) => this.skills.get(n),
@@ -766,12 +877,22 @@ export class Runtime {
   }
 
   async dispose(): Promise<void> {
+    this.mesh?.stop();
     this.agent.abort();
     this.swarm?.abortAll();
     this.swarm?.flush();
     await Promise.allSettled([this.browser?.close(), ...this.mcp.map((c) => c.close())]);
   }
 }
+
+/**
+ * For agents that can hand work to the mesh. Kept free of anything that changes from moment to moment (which
+ * machines are up, how busy), so the system prompt stays the same and model servers keep it cached.
+ */
+const MESH_PROMPT = `
+
+# Parallel tasks on the mesh
+Several machines serve models for you. With the \`task\` tool you can hand self-contained pieces of work to helper agents that run at the same time on different machines, each with a fresh context; only their reports come back. Use it for independent work that would otherwise run one step after another, or that would fill your context: exploring separate parts of a codebase, running and summarising tests, research, checking several files for the same thing. Give each a complete brief, since it sees nothing of this conversation. Use tier "fast" for reading, searching and summarising, "standard" for ordinary changes, "strong" for hard reasoning, or leave it on "auto". Keep work that depends on the previous step, and anything that needs this conversation's context, for yourself.`;
 
 function resolveSession(opts: RuntimeOptions, dir: string): Session {
   if (opts.ephemeral) return Session.create(opts.cwd);
