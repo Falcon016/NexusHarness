@@ -38,13 +38,15 @@ import {
 import type { Session } from './session.js';
 import type { HistorySource } from './history.js';
 import { draftInfo } from './draft.js';
+import { ActionWatch, actionLoopNote, watchRepeats, WritingLoop, writingLoopNote } from './loops.js';
 import type { SkillAccess } from '../tools/types.js';
 
 export type AgentEvent =
   | { type: 'turn_start' }
   | { type: 'text'; delta: string }
   | { type: 'thinking'; delta: string }
-  | { type: 'assistant'; message: Message }
+  /** `cut`: the reply was stopped because it started repeating itself; `message` is what was kept of it. */
+  | { type: 'assistant'; message: Message; cut?: boolean }
   | { type: 'tool_start'; id: string; name: string; description: string; input: unknown }
   | { type: 'tool_progress'; id: string; text: string }
   | { type: 'tool_end'; id: string; name: string; result: ToolResult }
@@ -248,6 +250,14 @@ export class Agent {
   /** This run wrote, edited or ran something (not just read): it is in the middle of the work. */
   private changedThisRun = false;
   private todoReminded = false;
+  /** Tool calls seen lately, to notice the model going round in a loop. */
+  private actions = new ActionWatch();
+  /** Replies in a row stopped for repeating themselves: how firmly the next request discourages it. */
+  private writingLoops = 0;
+  /** What the request after a stopped reply changes: less repetition, and no reasoning after it looped. */
+  private nextRequest: { antiRepeat?: number; thinking?: false } = {};
+  /** Set when the latest tool results told the model it is looping (those rounds do not use up the limit). */
+  private loopedThisRound = false;
 
   constructor(private o: AgentOptions) {
     this.id = o.id;
@@ -404,6 +414,11 @@ export class Agent {
         result = await this.callModel(signal);
       } catch (e) {
         if (signal.aborted) return 'aborted';
+        if (e instanceof WritingLoop && this.o.config.loopDetection) {
+          this.recoverFromWritingLoop(e);
+          iter--;
+          continue;
+        }
         const sent = this.lastEffort;
         const lower =
           e instanceof ProviderError && e.status === 400 && sent ? effortFix(e.message, sent) : undefined;
@@ -485,13 +500,53 @@ export class Agent {
       if (calls.some((c) => c.name !== 'todo_write')) this.workedThisRun = true;
       if (calls.some((c) => c.name !== 'todo_write' && (this.o.tools.get(c.name)?.risk ?? 'read') !== 'read'))
         this.changedThisRun = true;
+      this.loopedThisRound = false;
       const results = await this.runTools(calls, badToolCalls, signal);
       this.o.session.append({ role: 'user', content: results }, this.id);
       this.emit({ type: 'context', tokens: this.promptTokens() });
       if (signal.aborted) return 'aborted';
+      // Going round a loop is not progress, so it never uses up the tool-call limit and stops the work.
+      if (this.loopedThisRound) iter--;
     }
     this.emit({ type: 'status', text: `Stopped after ${max} tool iterations. Send a message to continue.` });
     return 'max_iterations';
+  }
+
+  /**
+   * A reply was stopped because it started repeating itself. Keep what it said before the repetition, tell the
+   * model what happened, and ask again, discouraging repetition a little more each time it happens in a row
+   * (and without reasoning, when the reasoning was what looped). The turn carries on; nothing is undone.
+   */
+  private recoverFromWritingLoop(e: WritingLoop): void {
+    this.writingLoops++;
+    if (e.kept.content.length) this.o.session.append(e.kept, this.id);
+    this.emit({ type: 'assistant', message: e.kept, cut: true });
+    this.o.session.append({ role: 'user', content: [{ type: 'text', text: writingLoopNote(e) }] }, this.id);
+    this.nextRequest = {
+      antiRepeat: Math.min(3, this.writingLoops),
+      ...(e.kind === 'thinking' || this.writingLoops >= 3 ? { thinking: false as const } : {}),
+    };
+    const where =
+      e.kind === 'thinking'
+        ? 'its reasoning'
+        : e.kind === 'tool'
+          ? `a ${e.tool?.name ?? 'tool'} call${e.tool?.target ? ` (${e.tool.target})` : ''}`
+          : 'its reply';
+    this.emit({
+      type: 'status',
+      text:
+        `Loop stopped: the model started repeating itself in ${where}. ` +
+        (e.kind === 'text'
+          ? 'Kept what came before the repeats and asked it to carry on.'
+          : 'Asked it to carry on.'),
+    });
+  }
+
+  /** The task the model is on, from its list, to name in a loop reminder. */
+  private currentTask(): string | undefined {
+    return (
+      this.todos.find((t) => t.status === 'in_progress') ?? this.todos.find((t) => t.status !== 'completed')
+    )?.content;
   }
 
   /**
@@ -721,6 +776,10 @@ export class Agent {
     this.lastMaxTokens = maxTokens;
     const effort = this.effortFor(m);
     this.lastEffort = effort;
+    // Its own stop as well as the user's, so a reply that starts repeating itself can be ended at once.
+    const own = new AbortController();
+    const extra = this.nextRequest;
+    this.nextRequest = {};
     const stream = m.provider.stream({
       model: m.model,
       system: this.o.system(),
@@ -729,15 +788,20 @@ export class Agent {
       ...(maxTokens ? { maxTokens } : {}),
       ...(this.o.config.thinkingBudget ? { thinkingBudget: this.o.config.thinkingBudget } : {}),
       ...(effort ? { reasoningEffort: effort } : {}),
-      signal,
+      ...extra,
+      signal: AbortSignal.any([signal, own.signal]),
     });
     this.emit({ type: 'request' });
     this.emit({ type: 'context', tokens: used });
     const speed = new SpeedMeter((tps) => this.emit({ type: 'speed', tokensPerSecond: tps }));
-    const r = await assemble(this.watchToolCalls(speed.watch(stream)), {
-      onText: (delta) => this.emit({ type: 'text', delta }),
-      onThinking: (delta) => this.emit({ type: 'thinking', delta }),
-    });
+    const watched = this.watchToolCalls(speed.watch(stream));
+    const r = await assemble(
+      this.o.config.loopDetection ? watchRepeats(watched, () => own.abort()) : watched,
+      {
+        onText: (delta) => this.emit({ type: 'text', delta }),
+        onThinking: (delta) => this.emit({ type: 'thinking', delta }),
+      },
+    );
     this.totalUsage.inputTokens += r.usage.inputTokens + (r.usage.cacheReadTokens ?? 0);
     this.totalUsage.outputTokens += r.usage.outputTokens;
     this.contextTokens =
@@ -746,6 +810,7 @@ export class Agent {
       (r.usage.cacheWriteTokens ?? 0) +
       r.usage.outputTokens;
     const tokensPerSecond = speed.final(r.usage.outputTokens);
+    this.writingLoops = 0;
     this.emit({
       type: 'usage',
       usage: r.usage,
@@ -927,6 +992,28 @@ export class Agent {
         result = { ...rest, content: `${result.content}\n${IMAGE_LEFT_OUT}` };
       }
       result = { ...result, content: truncateMiddle(redact(result.content), this.toolOutputCap()) };
+      const loop = this.o.config.loopDetection
+        ? this.actions.observe(p.call.name, p.input, result)
+        : undefined;
+      if (loop) {
+        // Told in the result itself, every time round: nothing is stopped, skipped or undone.
+        this.loopedThisRound = true;
+        result = { ...result, content: result.content + actionLoopNote(loop, this.currentTask()) };
+        const what = safeDescribe(p.tool!, p.input!);
+        this.emit({
+          type: 'status',
+          text:
+            `Loop: ${what} ` +
+            (loop.kind === 'repeat'
+              ? `gave the same result ${loop.count} times`
+              : loop.period === 1
+                ? `repeated ${loop.count} times in a row with the same result`
+                : `is part of a ${loop.period}-call cycle repeated ${loop.count} times`) +
+            (loop.strike === 1
+              ? '. Asked the model to change approach.'
+              : `. Reminded it again (${loop.strike}).`),
+        });
+      }
       results.set(p.call.id, result);
       this.emit({ type: 'tool_end', id: p.call.id, name: p.call.name, result });
     };

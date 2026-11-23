@@ -27,7 +27,9 @@ describe('agent loop', () => {
   });
 
   it('stops after maxToolIterations tool calls in one turn, and 0 means no limit', async () => {
-    const calls = (n: number) => Array.from({ length: n }, (_, i) => callTool(`c${i}`, 'ls', { path: '.' }));
+    // Different calls each time: the same one over and over is a loop, which never uses up the limit.
+    const calls = (n: number) =>
+      Array.from({ length: n }, (_, i) => callTool(`c${i}`, 'glob', { pattern: `part-${i}-*` }));
     const capped = makeAgent(ws.dir, new ScriptedProvider([...calls(5), say('done')]), {
       config: { maxToolIterations: 3 },
     });

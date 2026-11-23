@@ -51,6 +51,16 @@ export interface StreamRequest {
   thinkingBudget?: number;
   /** Reasoning effort for models that take one. Undefined: the model's default. */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * False: ask the model not to reason before answering, through the chat template's `enable_thinking` (which
+   * Qwen-style templates read). Used for one request after the model's reasoning went round in circles.
+   */
+  thinking?: false;
+  /**
+   * 1–3: discourage repeating, more firmly at each level (a presence penalty). Used for the request after a
+   * reply that started repeating itself; local servers only.
+   */
+  antiRepeat?: number;
   signal?: AbortSignal;
 }
 
