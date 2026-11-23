@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent, type Approver, type AgentEvent } from '../src/agent/agent.js';
 import { Session } from '../src/agent/session.js';
+import { COMPACTION_REQUEST } from '../src/agent/compaction.js';
 import { configSchema, type Config } from '../src/config/schema.js';
 import type { ResolvedModel } from '../src/llm/registry.js';
 import type { Provider, StreamEvent, StreamRequest } from '../src/llm/types.js';
@@ -67,7 +68,9 @@ export class AutoProvider implements Provider {
     ],
   ) {}
   static isSummary(r: StreamRequest) {
-    return r.tools.length === 0 && r.system.includes('compress');
+    if (r.tools.length === 0 && r.system.includes('compress')) return true;
+    const last = r.messages.at(-1)?.content.at(-1);
+    return last?.type === 'text' && last.text.startsWith(COMPACTION_REQUEST);
   }
   async *stream(req: StreamRequest): AsyncGenerator<StreamEvent> {
     this.requests.push(req);

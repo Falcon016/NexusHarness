@@ -42,6 +42,7 @@ export function startMockLlm(
       const j = JSON.parse(body || '{}') as {
         messages: { role: string; content: unknown }[];
         tools?: unknown[];
+        chat_template_kwargs?: { enable_thinking?: boolean };
       };
       requests.push(j);
       const last = j.messages.at(-1)!;
@@ -79,10 +80,12 @@ export function startMockLlm(
         res.end('data: [DONE]\n\n');
       };
       const system = JSON.stringify(j.messages[0]?.content ?? '');
-      if (!j.tools?.length && system.includes('compress')) {
-        // A compaction summary: reasoning first, then the summary, slowly enough to watch.
+      const asked = JSON.stringify(last.content ?? '').includes('[Compaction request]');
+      if ((!j.tools?.length && system.includes('compress')) || asked) {
+        // A compaction summary: reasoning first (unless asked not to), then the summary, slowly enough to watch.
+        const reasons = j.chat_template_kwargs?.enable_thinking === false ? 0 : 12;
         void (async () => {
-          for (let i = 0; i < 12; i++) {
+          for (let i = 0; i < reasons; i++) {
             send({ choices: [{ delta: { reasoning_content: `Weighing what to keep, step ${i}. ` } }] });
             await pause(100);
           }

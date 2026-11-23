@@ -51,6 +51,11 @@ export interface StreamRequest {
   thinkingBudget?: number;
   /** Reasoning effort for models that take one. Undefined: the model's default. */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * False: ask the model not to reason before answering (summaries), through the chat template's
+   * `enable_thinking`, which Qwen-style templates read. Servers whose templates do not read it ignore it.
+   */
+  thinking?: false;
   signal?: AbortSignal;
 }
 

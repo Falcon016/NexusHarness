@@ -643,6 +643,7 @@ export class Agent {
     instructions?: string,
   ): Promise<CompactResult | undefined> {
     const small = this.o.smallModel ?? this.o.model;
+    const same = small.provider === this.o.model.provider && small.model === this.o.model.model;
     const delays = this.o.retryDelaysMs ?? [1000, 3000];
     for (let attempt = 0; ; attempt++) {
       try {
@@ -655,6 +656,18 @@ export class Agent {
           signal,
           ...(instructions ? { instructions } : {}),
           onProgress: this.summaryProgress(),
+          // The same model can summarise the conversation it already has cached rather than read it all again.
+          ...(same
+            ? {
+                conversation: {
+                  system: this.o.system(),
+                  tools: this.o.tools.specs(),
+                  messages: this.view(),
+                  tokens: this.promptTokens(),
+                  reasoningEffort: this.effortFor(this.o.model),
+                },
+              }
+            : {}),
           // The summary replaces the todo_write calls that held the list, so carry the list itself over.
           ...(this.todos.length
             ? {

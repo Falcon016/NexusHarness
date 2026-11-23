@@ -1,7 +1,13 @@
 import { assemble } from '../llm/assemble.js';
-import type { Message, Provider } from '../llm/types.js';
+import {
+  ProviderError,
+  type Message,
+  type Provider,
+  type ReasoningEffort,
+  type ToolSpec,
+} from '../llm/types.js';
 import { truncateMiddle } from '../util/text.js';
-import { estimateMessages } from './context.js';
+import { estimateMessages, HARD_LIMIT } from './context.js';
 import { isToolResultOnly, type Session } from './session.js';
 
 export { estimateMessages } from './context.js';
@@ -79,6 +85,24 @@ const SUMMARY_SYSTEM =
   'not remaining. If the latest request is complete, say so plainly and leave "Remaining" empty. ' +
   'Do not invent details. Use short bullet points.';
 
+/** Starts the request appended to a conversation to have it summarised (tests and mock servers look for it). */
+export const COMPACTION_REQUEST = '[Compaction request]';
+
+/**
+ * The conversation exactly as it was last sent to the model. Summarising it as one more message on the end
+ * lets the server reuse what it has already read (llama.cpp keeps it cached), instead of reading the whole
+ * conversation again from scratch as a transcript.
+ */
+export interface LiveConversation {
+  system: string;
+  tools: ToolSpec[];
+  messages: Message[];
+  /** Its size in tokens, to check the summary request still fits the window. */
+  tokens: number;
+  /** Sent as it was with the conversation, since some templates write it into the system prompt. */
+  reasoningEffort?: ReasoningEffort | undefined;
+}
+
 export interface SummariseOptions {
   provider: Provider;
   model: string;
@@ -90,6 +114,8 @@ export interface SummariseOptions {
   signal?: AbortSignal | undefined;
   /** Called as the summary streams in: its size so far, whether the model is still reasoning, which part. */
   onProgress?: ((p: SummaryProgress) => void) | undefined;
+  /** When given, and it fits, the summary is asked for at the end of it (see LiveConversation). */
+  conversation?: LiveConversation | undefined;
 }
 
 export interface SummaryProgress {
@@ -99,34 +125,106 @@ export interface SummaryProgress {
   parts: number;
 }
 
+interface Ask {
+  system: string;
+  messages: Message[];
+  tools: ToolSpec[];
+  maxTokens: number;
+  reasoningEffort?: ReasoningEffort | undefined;
+}
+
+/** The summary text of one request; undefined when the model called a tool instead of answering. */
 async function ask(
   o: SummariseOptions,
-  prompt: string,
-  maxTokens: number,
+  req: Ask,
   part: { part: number; parts: number },
-): Promise<string> {
+): Promise<string | undefined> {
   let chars = 0;
   const report = (thinking: boolean, n: number) => {
     chars += n;
     o.onProgress?.({ chars, thinking, ...part });
   };
-  const { message } = await assemble(
-    o.provider.stream({
-      model: o.model,
-      system: SUMMARY_SYSTEM,
-      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-      tools: [],
-      maxTokens,
-      ...(o.signal ? { signal: o.signal } : {}),
-    }),
-    { onText: (d) => report(false, d.length), onThinking: (d) => report(true, d.length) },
-  );
-  return message.content
+  const send = (noThinking: boolean) =>
+    assemble(
+      o.provider.stream({
+        model: o.model,
+        system: req.system,
+        messages: req.messages,
+        tools: req.tools,
+        maxTokens: req.maxTokens,
+        ...(req.reasoningEffort ? { reasoningEffort: req.reasoningEffort } : {}),
+        // A summary needs no reasoning first, and on a local model reasoning is minutes of waiting.
+        ...(noThinking ? { thinking: false as const } : {}),
+        ...(o.signal ? { signal: o.signal } : {}),
+      }),
+      { onText: (d) => report(false, d.length), onThinking: (d) => report(true, d.length) },
+    );
+  let res;
+  try {
+    res = await send(true);
+  } catch (e) {
+    // A server that refuses the template setting gets the request again without it.
+    if (!(e instanceof ProviderError) || e.status !== 400 || o.signal?.aborted) throw e;
+    chars = 0;
+    res = await send(false);
+  }
+  const text = res.message.content
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('')
     .trim();
+  if (!text && res.message.content.some((b) => b.type === 'tool_use')) return undefined;
+  return text;
 }
+
+/** A few words of a message, to point at it. */
+const opening = (m: Message | undefined) =>
+  m ? truncateMiddle((pieces([m])[0] ?? '').replace(/\s+/g, ' '), 120) : '';
+
+/**
+ * Ask for the summary as one more message at the end of the conversation as it was last sent. The server has
+ * all of it cached already, so only this request is new: seconds instead of re-reading the whole thing.
+ * Undefined when it does not fit, or the model did not answer with a summary.
+ */
+async function summariseInPlace(
+  o: SummariseOptions & { conversation: LiveConversation },
+  targetTokens: number,
+): Promise<string | undefined> {
+  const c = o.conversation;
+  const keptNote = o.after?.length
+    ? `The last ${o.after.length} message${o.after.length === 1 ? '' : 's'} (from the one that starts ` +
+      `"${opening(o.after[0])}") stay in the conversation word for word after your summary: do not summarise ` +
+      'them, use them only to judge what is done.\n'
+    : '';
+  const instruction =
+    `${COMPACTION_REQUEST} The conversation is about to be shortened: write the summary that will replace its ` +
+    `older part, so the work can carry on from it. ${SUMMARY_SYSTEM}\n${keptNote}` +
+    (o.instructions ? `Focus: ${o.instructions}\n` : '') +
+    `Keep it under about ${Math.floor(targetTokens * 0.7)} words. Reply with the summary only, as plain text, ` +
+    'and do not call any tools.';
+  const maxTokens = targetTokens * 2;
+  const room = Math.floor(o.window * HARD_LIMIT) - c.tokens - estimateMessages([textMessage(instruction)]);
+  if (room < maxTokens) return undefined;
+
+  // Added to the last message rather than as a new one, so the conversation's own messages stay as they were.
+  const last = c.messages.at(-1);
+  const messages =
+    last?.role === 'user'
+      ? [
+          ...c.messages.slice(0, -1),
+          { ...last, content: [...last.content, { type: 'text' as const, text: instruction }] },
+        ]
+      : [...c.messages, textMessage(instruction)];
+  o.onProgress?.({ chars: 0, thinking: false, part: 1, parts: 1 });
+  const text = await ask(
+    o,
+    { system: c.system, tools: c.tools, messages, maxTokens, reasoningEffort: c.reasoningEffort },
+    { part: 1, parts: 1 },
+  );
+  return text && text.length >= 20 ? text : undefined;
+}
+
+const textMessage = (text: string): Message => ({ role: 'user', content: [{ type: 'text', text }] });
 
 /**
  * Summarise by folding chunks into a running summary, so the input to every model call fits the
@@ -135,6 +233,15 @@ async function ask(
 export async function summarise(messages: Message[], o: SummariseOptions): Promise<string> {
   const window = Math.max(2048, o.window);
   const targetTokens = Math.max(250, Math.min(1500, Math.floor(window * 0.08)));
+  if (o.conversation) {
+    try {
+      const text = await summariseInPlace({ ...o, conversation: o.conversation }, targetTokens);
+      if (text) return text;
+    } catch (e) {
+      if (o.signal?.aborted) throw e;
+      // Refused or failed (a server whose real window is smaller, say): the transcript way below still works.
+    }
+  }
   const budgetChars = Math.max(2000, Math.floor(window * 0.4 * CHARS_PER_TOKEN));
   const focus = o.instructions ? `Focus: ${o.instructions}\n` : '';
   const limit = `Keep the summary under about ${Math.floor(targetTokens * 0.7)} words.`;
@@ -168,9 +275,15 @@ export async function summarise(messages: Message[], o: SummariseOptions): Promi
     const prompt = summary
       ? `Existing summary so far:\n${summary}\n\nMerge in this later part of the conversation:\n${chunk}\n\n${later}${focus}${limit}\nWrite the updated summary now.`
       : `${chunk}\n\n${later}${focus}${limit}\nWrite the summary now.`;
-    // Reasoning models can spend the whole budget thinking; retry once with a larger one before giving up.
-    let text = await ask(o, prompt, targetTokens * 2, part);
-    if (!text) text = await ask(o, prompt, Math.min(targetTokens * 6, Math.floor(window * 0.4)), part);
+    const req = (maxTokens: number): Ask => ({
+      system: SUMMARY_SYSTEM,
+      messages: [textMessage(prompt)],
+      tools: [],
+      maxTokens,
+    });
+    // A model that reasons anyway can spend the whole budget on it; retry once with a larger one.
+    let text = await ask(o, req(targetTokens * 2), part);
+    if (!text) text = await ask(o, req(Math.min(targetTokens * 6, Math.floor(window * 0.4))), part);
     if (!text) throw new Error('The model returned an empty summary.');
     summary = text;
   }
@@ -211,6 +324,8 @@ export async function compact(opts: {
   /** Appended to the stored summary as is (the agent's current task list). */
   appendix?: string;
   onProgress?: (p: SummaryProgress) => void;
+  /** The conversation as last sent, when the summariser is the model it was sent to. */
+  conversation?: LiveConversation;
 }): Promise<CompactResult | undefined> {
   const plan = planCompaction(opts.session, opts.keepRecent);
   if (!plan) return undefined;
@@ -223,6 +338,7 @@ export async function compact(opts: {
     after: plan.kept,
     onProgress: opts.onProgress,
     signal: opts.signal,
+    conversation: opts.conversation,
   });
   if (summary.length < 20) throw new CompactionError('The summary was too short to be trustworthy.');
 
