@@ -4,6 +4,17 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Loop detection (`loopDetection`, on by default).** A model stuck in a loop is moved on without stopping the
+  work or ending the turn. A reply, its reasoning or a file being written that starts repeating the same passage
+  is stopped within a second or two: what came before the repeats is kept, the model is told what happened, and
+  the request is sent again with a presence penalty (stronger each time in a row) and, after looping reasoning,
+  with reasoning off for that one request. Repeating the same tool calls with the same results (back to back, or
+  as a cycle of a few calls) gets a reminder in the tool result, naming the current task and saying not to skip
+  it, and again, more firmly, every time round. Polling that sees the result change is not a loop. Rounds spent
+  looping do not count toward `maxToolIterations`, so a loop never stops the work.
+- **No tool-call limit by default.** `maxToolIterations` now defaults to `0` (no limit), so long tasks run to the
+  end without stopping to ask you to continue. Set a number (or use `/limits`) to bring a limit back.
+
 - **A model that can't see images no longer breaks the session.** When the agent read a screenshot on a
   llama.cpp model started without its vision projector (`--mmproj`), the server refused the request
   ("image input is not supported"), and since the image stayed in the conversation every later request failed

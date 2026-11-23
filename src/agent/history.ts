@@ -43,6 +43,7 @@ export interface TranscriptEntry {
 
 const CHUNK = 64 * 1024;
 const TODO_CHECK = '[Task list check]';
+const LOOP_NOTE = '[Loop check]';
 
 function readSlice(file: string, from: 'start' | 'end', bytes = CHUNK): string {
   const fd = openSync(file, 'r');
@@ -64,7 +65,10 @@ const userText = (m: Message): string | undefined => {
     .map((b) => b.text)
     .join('\n')
     .trim();
-  return t && !t.startsWith(TODO_CHECK) && !t.startsWith('[Summary of the earlier conversation')
+  return t &&
+    !t.startsWith(TODO_CHECK) &&
+    !t.startsWith(LOOP_NOTE) &&
+    !t.startsWith('[Summary of the earlier conversation')
     ? t
     : undefined;
 };

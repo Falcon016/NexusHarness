@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, Approver } from '../src/agent/agent.js';
 import type { StreamEvent } from '../src/llm/types.js';
-import { callTool, makeAgent, say, ScriptedProvider, tmpWorkspace } from './helpers.js';
+import { callTool, makeAgent, say, ScriptedProvider, testConfig, tmpWorkspace } from './helpers.js';
 
 let ws: ReturnType<typeof tmpWorkspace>;
 beforeEach(() => (ws = tmpWorkspace()));
@@ -27,16 +27,18 @@ describe('agent loop', () => {
   });
 
   it('stops after maxToolIterations tool calls in one turn, and 0 means no limit', async () => {
-    const calls = (n: number) => Array.from({ length: n }, (_, i) => callTool(`c${i}`, 'ls', { path: '.' }));
+    // Different calls each time: the same one over and over is a loop, which never uses up the limit.
+    const calls = (n: number) =>
+      Array.from({ length: n }, (_, i) => callTool(`c${i}`, 'glob', { pattern: `part-${i}-*` }));
     const capped = makeAgent(ws.dir, new ScriptedProvider([...calls(5), say('done')]), {
       config: { maxToolIterations: 3 },
     });
     await capped.agent.run('go');
     expect(capped.events.some((e) => e.type === 'turn_end' && e.stopReason === 'max_iterations')).toBe(true);
 
-    const free = makeAgent(ws.dir, new ScriptedProvider([...calls(80), say('done')]), {
-      config: { maxToolIterations: 0 },
-    });
+    // No limit is the default: long tasks run until they are done.
+    expect(testConfig().maxToolIterations).toBe(0);
+    const free = makeAgent(ws.dir, new ScriptedProvider([...calls(80), say('done')]));
     await free.agent.run('go');
     expect(free.events.some((e) => e.type === 'turn_end' && e.stopReason === 'max_iterations')).toBe(false);
     expect(free.events.filter((e) => e.type === 'tool_end')).toHaveLength(80);

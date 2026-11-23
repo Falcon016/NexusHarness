@@ -196,8 +196,17 @@ export function buildBody(
     ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(req.reasoningEffort ? { reasoning_effort: req.reasoningEffort } : {}),
-    ...(req.reasoningEffort && opts.templateKwargs
-      ? { chat_template_kwargs: { reasoning_effort: req.reasoningEffort } }
+    ...(opts.templateKwargs && (req.reasoningEffort || req.thinking === false)
+      ? {
+          chat_template_kwargs: {
+            ...(req.reasoningEffort ? { reasoning_effort: req.reasoningEffort } : {}),
+            ...(req.thinking === false ? { enable_thinking: false } : {}),
+          },
+        }
+      : {}),
+    // OpenAI's reasoning models refuse a presence penalty; local servers all take it.
+    ...(opts.templateKwargs && req.antiRepeat
+      ? { presence_penalty: Math.min(1.5, 0.5 * req.antiRepeat) }
       : {}),
     messages: [{ role: 'system', content: req.system }, ...req.messages.flatMap(toWire)],
     ...(tools.length ? { tools } : {}),

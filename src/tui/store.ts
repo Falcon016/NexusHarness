@@ -1,6 +1,7 @@
 import { cleanText } from './clean.js';
 import type { AgentEvent } from '../agent/agent.js';
 import { TODO_CHECK, type Agent } from '../agent/agent.js';
+import { isLoopNote } from '../agent/loops.js';
 import type { BrowserEvent } from '../browser/service.js';
 import type { Message } from '../llm/types.js';
 import type { Swarm } from '../swarm/swarm.js';
@@ -472,8 +473,9 @@ export class UiStore {
         const s = this.streamed.get(name);
         this.streamed.delete(name);
         if (s?.printed) {
-          // The start of this reply is printed already: print what is left of it.
-          this.pushPart(name, a.text, true);
+          // The start of this reply is printed already: print what is left of it (not the repeats of a reply
+          // stopped for repeating itself).
+          if (!e.cut) this.pushPart(name, a.text, true);
         } else {
           // Commit the reasoning and the streamed text once the message is complete.
           const thought = e.message.content
@@ -681,7 +683,7 @@ export function replayInto(store: UiStore, messages: Message[]): void {
         store.push({ kind: 'thinking', agent: 'main', text: b.text.trim(), ms: 0 });
       } else if (b.type === 'text') {
         if (m.role === 'user') {
-          if (!b.text.startsWith(TODO_CHECK)) store.user(b.text);
+          if (!b.text.startsWith(TODO_CHECK) && !isLoopNote(b.text)) store.user(b.text);
         } else store.push({ kind: 'assistant', text: b.text, agent: 'main' });
       } else if (b.type === 'tool_use') {
         calls.set(b.id, { name: b.name, description: JSON.stringify(b.input).slice(0, 80) });

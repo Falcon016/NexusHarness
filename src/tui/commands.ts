@@ -271,7 +271,7 @@ function describePlan(p: FlushPlan): string {
 }
 
 const MESSAGE_LIMITS = [60, 120, 250, 500, 1000, 0];
-const TOOL_LIMITS = [60, 150, 300, 0];
+const TOOL_LIMITS = [0, 60, 150, 300];
 
 /**
  * Ask how long agents may work before checking in, and save the answers to the config. Esc keeps the current
