@@ -220,6 +220,8 @@ function md(src) {
 // ------------------------------------------------------------------------------------------------ state
 const S = {
   info: null,
+  /** The machines serving models, when the mesh is on (refreshed every few seconds). */
+  nodes: null,
   models: null,
   sessions: [],
   id: null,
@@ -853,6 +855,59 @@ function diffNodes(lines) {
 }
 
 // ------------------------------------------------------------------------------------------------ side panel
+const gib = (mib) => (mib >= 1024 ? `${(mib / 1024).toFixed(1)} GB` : `${mib} MB`);
+
+/** The mesh: each machine, whether it is up, its GPUs and memory, and the models it serves. */
+function nodesCard(nodes) {
+  return h(
+    'div',
+    { class: 'pcard' },
+    h('h4', { text: 'Machines' }),
+    nodes.map((n) => {
+      const t = n.telemetry;
+      const hw = t
+        ? [
+            ...t.gpus.map(
+              (g) =>
+                `${g.name} ${gib(g.memoryUsed)} / ${gib(g.memoryTotal)}` +
+                (g.utilization !== undefined ? ` · ${g.utilization}%` : ''),
+            ),
+            `RAM ${((t.memoryTotal - t.memoryFree) / 1024 ** 3).toFixed(1)} / ${(t.memoryTotal / 1024 ** 3).toFixed(1)} GB · CPU ${Math.round(t.cpuLoad * 100)}%`,
+          ]
+        : n.telemetryNote
+          ? [`hardware: ${n.telemetryNote}`]
+          : [];
+      return h(
+        'div',
+        { class: 'agent' },
+        h('span', { class: `dot ${n.up ? 'run' : ''}`, title: n.up ? 'Up' : 'Down' }),
+        h(
+          'div',
+          null,
+          h('strong', { text: n.name }),
+          h('span', {
+            class: 'role',
+            text: n.up
+              ? `${n.latencyMs ?? '?'} ms${n.running ? ` · ${n.running} task${n.running === 1 ? '' : 's'} running` : ''}${n.sensitive ? '' : ' · not for sensitive work'}`
+              : `down${n.error ? `: ${n.error}` : ''}`,
+          }),
+          hw.map((line) => h('span', { class: 'role', text: line })),
+          n.models.map((m) => {
+            const st = n.status[m.providerId] ?? {};
+            return h('span', {
+              class: 'role',
+              text:
+                `${m.id} · ${m.tier}` +
+                (st.slotsTotal ? ` · ${st.slotsBusy ?? 0}/${st.slotsTotal} busy` : '') +
+                (m.tokensPerSecond ? ` · ${Math.round(m.tokensPerSecond)} tok/s` : ''),
+            });
+          }),
+        ),
+      );
+    }),
+  );
+}
+
 function renderPanel() {
   const st = S.st;
   const panel = $('#panel');
@@ -963,6 +1018,7 @@ function renderPanel() {
       ),
     );
   }
+  if (S.nodes?.length) cards.push(nodesCard(S.nodes));
   if (browser) {
     const holder = st.browser.holder;
     cards.push(
@@ -1151,6 +1207,18 @@ async function start() {
   } catch (e) {
     if (e instanceof AuthError) return;
     throw e;
+  }
+  if (S.info.mesh && !S.nodesTimer) {
+    const loadNodes = async () => {
+      try {
+        S.nodes = (await api('/api/nodes')).nodes;
+        renderPanel();
+      } catch {
+        /* the next round tries again */
+      }
+    };
+    void loadNodes();
+    S.nodesTimer = setInterval(loadNodes, 10_000);
   }
   $('#login').hidden = true;
   $('#app').hidden = false;

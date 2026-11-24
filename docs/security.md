@@ -73,3 +73,7 @@ and CI scan the tree and git history for credential shapes.
 ## Reporting a vulnerability
 
 See [SECURITY.md](../SECURITY.md).
+
+## The mesh
+
+With the mesh on ([mesh.md](mesh.md)), only model requests go to other machines; tools, files, approvals and the sandbox stay on the machine running `nexus`. Without a `mesh.nodes` list, only servers on this machine or private network addresses are used, never a cloud API. Machines marked `sensitive: false` only get tasks the agent marks as involving nothing private. `nexus node` is read-only (it answers one request with hardware numbers and cannot run anything), and both its requests and replies are signed with HMAC-SHA256 using a per-machine pairing key. A timestamp check refuses requests older than a minute, so a captured request cannot be replayed later.

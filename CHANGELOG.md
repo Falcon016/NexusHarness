@@ -4,6 +4,14 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **The mesh: several machines serving models, used as one** (`mesh`, off by default; [docs/mesh.md](docs/mesh.md)).
+  - `task` runs self-contained work as helper agents in parallel on the best free machine, with fresh contexts; only their reports come back.
+  - Work is matched to the size of model it needs (fast, standard, strong; set by the agent or guessed from the wording).
+  - A stuck task moves up a size with a summary of what was tried, and a stuck main agent gets a stronger model until the work moves again.
+  - If a machine stops answering, the conversation carries on on another one.
+  - `nexus node` reports GPU, RAM and CPU load (read-only, signed with a per-machine key).
+  - `nexus mesh add|list|remove` and `/nodes` manage and show the machines, and the dashboard has a Machines card.
+  - Local only: cloud APIs are never added on their own.
 - **Loop detection (`loopDetection`, on by default).** A model stuck in a loop is moved on without stopping the
   work or ending the turn. A reply, its reasoning or a file being written that starts repeating the same passage
   is stopped within a second or two: what came before the repeats is kept, the model is told what happened, and

@@ -31,6 +31,8 @@ Usage
   ${BIN} serve [options]           Start the self-hosted web dashboard (\`${BIN} serve --help\`)
   ${BIN} setup                     Guided setup: provider, API key, model, safety and Telegram (\`${BIN} setup --help\`)
   ${BIN} telegram                  Run your Telegram bot, to use the agent from your phone
+  ${BIN} mesh list | add | remove  Machines serving models, used as one (docs/mesh.md)
+  ${BIN} node [pair]               Report this machine's hardware to the mesh (read-only)
   ${BIN} auth set <provider>       Store an API key (hidden prompt, or pipe it on stdin)
   ${BIN} auth list | remove <p>    Manage stored keys
   ${BIN} trust                     Trust this project's .nexusharness config, skills and extensions
@@ -207,6 +209,14 @@ async function main(): Promise<number> {
   // Subcommands with their own flags are dispatched before the interactive flags are parsed.
   if (process.argv[2] === 'serve') return serveCommand(process.argv.slice(3));
   if (process.argv[2] === 'setup') return setupCommand(process.argv.slice(3));
+  if (process.argv[2] === 'node') {
+    const { nodeCommand } = await import('./mesh/cli.js');
+    return nodeCommand(process.argv.slice(3));
+  }
+  if (process.argv[2] === 'mesh') {
+    const { meshCommand } = await import('./mesh/cli.js');
+    return meshCommand(process.argv.slice(3), readSecret);
+  }
   if (process.argv[2] === 'telegram') {
     const { telegramCommand } = await import('./telegram/run.js');
     return telegramCommand(process.argv.slice(3));

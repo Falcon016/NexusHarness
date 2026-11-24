@@ -1,7 +1,15 @@
 import { newId } from '../util/id.js';
 import { parseSse } from '../util/sse.js';
 import { postJsonStream } from './http.js';
-import type { Message, ModelInfo, Provider, StopReason, StreamEvent, StreamRequest } from './types.js';
+import type {
+  Message,
+  ModelInfo,
+  Provider,
+  ServerStatus,
+  StopReason,
+  StreamEvent,
+  StreamRequest,
+} from './types.js';
 import { ProviderError } from './types.js';
 
 export interface OpenAIOptions {
@@ -130,6 +138,40 @@ export class OpenAICompatProvider implements Provider {
     }
     return models;
   }
+
+  async status(signal?: AbortSignal): Promise<ServerStatus> {
+    const f = this.opts.fetchImpl ?? fetch;
+    const init = { headers: this.headers(), ...(signal ? { signal } : {}) };
+    const origin = this.baseUrl.replace(/\/v1$/, '');
+    const [slots, props, metrics] = await Promise.all([
+      getJson<{ is_processing?: boolean; state?: number }[]>(f, `${origin}/slots`, init),
+      getJson<{ total_slots?: number }>(f, `${origin}/props`, init),
+      (async () => {
+        try {
+          const r = await f(`${origin}/metrics`, init);
+          return r.ok ? await r.text() : undefined;
+        } catch {
+          return undefined;
+        }
+      })(),
+    ]);
+    const out: ServerStatus = {};
+    if (Array.isArray(slots)) {
+      out.slotsTotal = slots.length;
+      out.slotsBusy = slots.filter((x) => x.is_processing ?? x.state === 1).length;
+    } else if (props?.total_slots) out.slotsTotal = props.total_slots;
+    if (metrics) {
+      const tps = metric(metrics, 'llamacpp:predicted_tokens_seconds');
+      const kv = metric(metrics, 'llamacpp:kv_cache_usage_ratio');
+      const busy = metric(metrics, 'llamacpp:requests_processing');
+      const waiting = metric(metrics, 'llamacpp:requests_deferred');
+      if (tps) out.tokensPerSecond = tps;
+      if (kv !== undefined) out.kvCacheUsage = kv;
+      if (busy !== undefined && out.slotsBusy === undefined) out.slotsBusy = busy;
+      if (waiting !== undefined) out.requestsWaiting = waiting;
+    }
+    return out;
+  }
 }
 
 interface RawModel {
@@ -140,7 +182,7 @@ interface RawModel {
   max_context_length?: number;
   state?: string;
   status?: { value?: string; args?: string[]; preset?: string };
-  meta?: { n_ctx?: number };
+  meta?: { n_ctx?: number; n_params?: number };
 }
 
 async function getJson<T>(f: typeof fetch, url: string, init: RequestInit): Promise<T | undefined> {
@@ -174,7 +216,18 @@ function toModelInfo(m: RawModel): ModelInfo {
     ...(m.aliases?.length ? { aliases: m.aliases } : {}),
     ...(ctx ? { contextWindow: ctx } : {}),
     ...(state ? { loaded: state === 'loaded' } : {}),
+    ...(m.meta?.n_params ? { params: m.meta.n_params } : {}),
   };
+}
+
+/** A value from a Prometheus text page (llama.cpp's `/metrics`, when it was started with `--metrics`). */
+export function metric(text: string, name: string): number | undefined {
+  const m = new RegExp(
+    `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\{[^}]*\\})?\\s+([0-9.eE+-]+)`,
+    'm',
+  ).exec(text);
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isFinite(n) ? n : undefined;
 }
 
 /**

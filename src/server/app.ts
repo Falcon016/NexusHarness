@@ -269,6 +269,17 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           ...Object.keys(SWARM_PRESETS),
           ...(catalog.config.swarm.agents.length ? ['config'] : []),
         ],
+        mesh: !!catalog.mesh,
+      });
+    }
+    if (path === '/api/nodes' && method === 'GET') {
+      const mesh = catalog.mesh;
+      return json(res, 200, {
+        enabled: !!mesh,
+        nodes: (mesh?.nodes() ?? []).map((n) => ({
+          ...n,
+          models: n.models.map((m) => ({ ...m, tokensPerSecond: mesh?.speedOf(m) })),
+        })),
       });
     }
     if (path === '/api/models' && method === 'GET')

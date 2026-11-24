@@ -46,7 +46,7 @@ export class ScriptedProvider implements Provider {
   }
 }
 
-type Turn = StreamEvent[] | ((req: StreamRequest) => StreamEvent[] | Promise<StreamEvent[]>);
+export type Turn = StreamEvent[] | ((req: StreamRequest) => StreamEvent[] | Promise<StreamEvent[]>);
 
 /**
  * A provider that tells compaction's summary requests apart from real conversation calls, so tests can
