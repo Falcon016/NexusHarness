@@ -129,14 +129,19 @@ export function ApprovalDialog({
   const [i, setI] = useState(0);
   const [feedback, setFeedback] = useState(false);
   const options = [
-    { label: 'Yes', hint: 'run it once', r: { allow: true } as ApprovalResponse },
-    {
-      label: `Yes, and don't ask again for ${req.grantLabel}`,
-      hint: 'this session',
-      r: { allow: true, always: true } as ApprovalResponse,
-    },
-    { label: 'No', hint: '', r: { allow: false } as ApprovalResponse },
-    { label: 'No, and tell it what to do instead', hint: '', r: undefined },
+    { key: 'y', label: 'Yes', hint: 'run it once', r: { allow: true } as ApprovalResponse },
+    ...(req.once
+      ? []
+      : [
+          {
+            key: 'a',
+            label: `Yes, and don't ask again for ${req.grantLabel}`,
+            hint: 'this session',
+            r: { allow: true, always: true } as ApprovalResponse,
+          },
+        ]),
+    { key: 'n', label: 'No', hint: '', r: { allow: false } as ApprovalResponse },
+    { key: '', label: 'No, and tell it what to do instead', hint: '', r: undefined },
   ];
   useInput(
     (input, key) => {
@@ -149,10 +154,10 @@ export function ApprovalDialog({
         else setFeedback(true);
       };
       if (key.return) return pick(i);
-      if (input === 'y') return pick(0);
-      if (input === 'a') return pick(1);
-      if (input === 'n') return pick(2);
-      if (/^[1-4]$/.test(input)) pick(Number(input) - 1);
+      const byKey = options.findIndex((o) => o.key && o.key === input);
+      if (byKey >= 0) return pick(byKey);
+      const n = Number(input);
+      if (Number.isInteger(n) && n >= 1 && n <= options.length) pick(n - 1);
     },
     { isActive: !feedback },
   );
@@ -239,7 +244,7 @@ export function ApprovalDialog({
         <Keys
           items={[
             ['y', 'yes'],
-            ['a', 'always'],
+            ...(req.once ? [] : ([['a', 'always']] as [string, string][])),
             ['n', 'no'],
             ['esc', 'deny'],
           ]}

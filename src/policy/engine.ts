@@ -89,6 +89,10 @@ export class PolicyEngine {
       };
     }
 
+    // Some tools decide for themselves, whatever the mode or earlier answers (a sentry shield).
+    const own = tool.approval?.(input as never);
+    if (own) return own;
+
     const ask = matching.find((r) => r.action === 'ask');
     if (ask) return { action: 'ask', reason: `Rule ${ruleLabel(ask)} requires approval` };
 

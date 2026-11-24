@@ -164,6 +164,37 @@ export const configSchema = z.object({
     })
     .default({ enabled: false, nodes: {}, probeSeconds: 15, tiers: {}, maxTasks: 4 }),
 
+  /**
+   * Sentry mode (`/sentry`): watch this machine and your LAN for the changes an intruder makes, look into them,
+   * and put up reversible shields. Off until you turn it on. See docs/sentry.md.
+   */
+  sentry: z
+    .object({
+      /** Minutes between sweeps. */
+      intervalMinutes: z.number().int().min(1).max(1440).default(10),
+      /** Private networks to watch for new devices, like "192.168.1.0/24". Empty: the ones this machine is on. */
+      networks: z.array(z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/)).default([]),
+      /** Shields sentry may put up without asking: blocking an outside address, quarantining a file you own. */
+      autoShields: z.array(z.enum(['block-ip', 'quarantine-file'])).default(['block-ip', 'quarantine-file']),
+      /** How long an automatic address block lasts, in minutes. */
+      blockMinutes: z.number().int().min(1).max(10080).default(60),
+      /** Failed SSH logins from one address in one sweep that count as an attack. */
+      loginThreshold: z.number().int().min(3).default(10),
+      /** Have the sentry agent look into medium and worse findings (when the main agent is free). */
+      investigate: z.boolean().default(true),
+      /** Also send alerts to your Telegram bot's users, when the bot is set up. */
+      telegram: z.boolean().default(true),
+    })
+    .default({
+      intervalMinutes: 10,
+      networks: [],
+      autoShields: ['block-ip', 'quarantine-file'],
+      blockMinutes: 60,
+      loginThreshold: 10,
+      investigate: true,
+      telegram: true,
+    }),
+
   swarm: z
     .object({
       agents: z.array(swarmAgentSchema).default([]),

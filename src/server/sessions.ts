@@ -74,6 +74,16 @@ export interface WebState {
   compacting?: UiSnapshot['compacting'];
   status?: string;
   todos: { content: string; status: string }[];
+  /** Sentry mode in this session, once it has been on. */
+  sentry?: {
+    on: boolean;
+    networks: string[];
+    lastSweep?: number;
+    open: { id: string; severity: string; title: string; report?: string }[];
+    shields: { id: string; kind: string; target: string; by: string; expires?: number; reason: string }[];
+    ledgerOk: boolean;
+    alerts: { at: number; level: string; text: string }[];
+  };
   approval?: ApprovalRequest & { id: number; pending: number };
   question?: { id: number; agent: string; question: string; options?: string[] };
   warnings: string[];
@@ -136,6 +146,13 @@ export class WebSession {
     this.store.subscribe(() => this.push());
     for (const e of ['mode', 'sandbox', 'todos', 'model', 'effort'] as const)
       rt.events.on(e, () => this.push(true));
+    rt.events.on('sentry', (a) => {
+      this.store.notice(
+        a.text,
+        a.level === 'critical' || a.level === 'high' ? 'error' : a.level === 'medium' ? 'warn' : 'info',
+      );
+      this.push(true);
+    });
     rt.broker.approvalHandler = (req, signal) =>
       new Promise<ApprovalResponse>((resolveApproval) => {
         const id = ++this.seq;
@@ -206,6 +223,34 @@ export class WebSession {
       ...(snap.compacting ? { compacting: snap.compacting } : {}),
       ...(snap.status ? { status: snap.status } : {}),
       todos: rt.todos,
+      ...(rt.sentry
+        ? (() => {
+            const st = rt.sentry.status();
+            return {
+              sentry: {
+                on: st.on,
+                networks: st.networks,
+                ...(st.lastSweep ? { lastSweep: st.lastSweep } : {}),
+                open: st.open.map((f) => ({
+                  id: f.id,
+                  severity: f.severity,
+                  title: f.title,
+                  ...(f.report ? { report: f.report } : {}),
+                })),
+                shields: st.shields.map((x) => ({
+                  id: x.id,
+                  kind: x.kind,
+                  target: x.target,
+                  by: x.by,
+                  reason: x.reason,
+                  ...(x.expires ? { expires: x.expires } : {}),
+                })),
+                ledgerOk: st.ledger.ok,
+                alerts: rt.sentryAlerts.slice(-10).map((a) => ({ at: a.at, level: a.level, text: a.text })),
+              },
+            };
+          })()
+        : {}),
       ...(this.approval
         ? { approval: { ...this.approval.req, id: this.approval.id, pending: rt.broker.pending } }
         : {}),
@@ -276,6 +321,24 @@ export class WebSession {
     this.store.user(text);
     if (rt.agent.isRunning) rt.agent.steer(text);
     else void rt.agent.run(text);
+  }
+
+  /** Sentry mode from the dashboard: on, off, sweep, lift, accept, dismiss. */
+  async sentry(action: string, id?: string): Promise<string> {
+    const rt = this.runtime;
+    let text: string;
+    if (action === 'on') text = await rt.sentryOn();
+    else if (action === 'off') text = rt.sentryOff();
+    else if (!rt.sentry) throw new HttpError(409, 'Sentry has not been on in this session');
+    else if (action === 'sweep') {
+      const fresh = await rt.sentry.sweep();
+      text = fresh.length ? `${fresh.length} new` : 'Nothing new since the last sweep.';
+    } else if (action === 'lift' && id) text = (await rt.sentry.lift(id, 'user')).text;
+    else if (action === 'accept' && id) text = await rt.sentry.acceptFindings(id);
+    else if (action === 'dismiss' && id) text = rt.sentry.dismiss(id);
+    else throw new HttpError(400, 'Unknown sentry action');
+    this.push(true);
+    return text;
   }
 
   abort(): void {

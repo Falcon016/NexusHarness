@@ -4,6 +4,19 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Sentry mode (`/sentry`, off until you turn it on; [docs/sentry.md](docs/sentry.md)).** A defensive mode inspired
+  by Shirudo's shields.
+  - **Watch:** a baseline of this machine (accounts, admins, SSH keys and settings, setuid programs, listening ports,
+    scheduled jobs, startup items, services, firewall, kernel modules, LAN devices) is compared on every sweep, and
+    failed SSH logins are counted.
+  - **Investigate:** a read-only sentry agent looks into medium and worse findings once the main agent is free.
+  - **Shield:** six narrow, reversible protections. Blocking an attacking outside address (with a timeout, in
+    sentry's own nftables table) and quarantining a file you can move go ahead on their own; everything else asks
+    you every time, in every mode.
+  - **Record:** every action goes on an HMAC-chained ledger.
+  - **Alert:** alerts reach the terminal, the dashboard's Sentry card, and Telegram when the bot is set up.
+  - Tools can now settle their own approval (`approval`): shields that must always ask offer no "don't ask
+    again".
 - **The mesh: several machines serving models, used as one** (`mesh`, off by default; [docs/mesh.md](docs/mesh.md)).
   - `task` runs self-contained work as helper agents in parallel on the best free machine, with fresh contexts; only their reports come back.
   - Work is matched to the size of model it needs (fast, standard, strong; set by the agent or guessed from the wording).
