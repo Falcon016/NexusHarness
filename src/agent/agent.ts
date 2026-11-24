@@ -39,6 +39,18 @@ import type { Session } from './session.js';
 import type { HistorySource } from './history.js';
 import { draftInfo } from './draft.js';
 import type { MeshService } from '../mesh/tasks.js';
+import {
+  emptyStats,
+  samplingFor,
+  stepBudget,
+  ThinkingBudget,
+  watchBudget,
+  wrapUpNote,
+  CHARS_PER_TOKEN,
+  type KeyReason,
+  type StepBudget,
+  type ThinkingStats,
+} from './thinking.js';
 import { ActionWatch, actionLoopNote, watchRepeats, WritingLoop, writingLoopNote } from './loops.js';
 import type { SkillAccess } from '../tools/types.js';
 
@@ -277,6 +289,16 @@ export class Agent {
   private nextRequest: { antiRepeat?: number; thinking?: false } = {};
   /** Set when the latest tool results told the model it is looping (those rounds do not use up the limit). */
   private loopedThisRound = false;
+  /** Why the next step needs real thought (undefined: a routine step). Starts set: a new message is a key step. */
+  private keyStep: KeyReason | undefined = 'new message';
+  /** The step just wrapped up at its budget: the next request acts on it, with no budget of its own. */
+  private wrapping = false;
+  /** Reasoning on this session's requests, for /thinking. */
+  readonly thinkingStats: ThinkingStats = emptyStats();
+  /** The budget the latest request had, for the UI. */
+  lastBudget: StepBudget | undefined;
+  private warnedGreedy = false;
+  private toldWrapUp = false;
   /** Stuck badly enough that a stronger model on the mesh should take over, if there is one. */
   private wantStronger = false;
   /** The model in use before a stronger one took over, to go back to once the work is moving again. */
@@ -409,7 +431,10 @@ export class Agent {
       );
       any = true;
     }
-    if (any) this.emitQueue();
+    if (any) {
+      this.keyStep ??= 'steered';
+      this.emitQueue();
+    }
   }
 
   /** Close any tool call left unanswered by a crash or abort so the next request is valid. */
@@ -440,6 +465,7 @@ export class Agent {
         { role: 'user', content: typeof input === 'string' ? [{ type: 'text', text: input }] : input },
         this.id,
       );
+      this.keyStep = 'new message';
       for (;;) {
         stop = await this.loop(signal);
         if (signal.aborted) break;
@@ -449,6 +475,7 @@ export class Agent {
         if (!next) break;
         this.emitQueue();
         this.o.session.append({ role: 'user', content: [{ type: 'text', text: next }] }, this.id);
+        this.keyStep = 'new message';
       }
     } catch (e) {
       if (signal.aborted) stop = 'aborted';
@@ -492,6 +519,11 @@ export class Agent {
         if (signal.aborted) return 'aborted';
         if (e instanceof WritingLoop && this.o.config.loopDetection) {
           this.recoverFromWritingLoop(e);
+          iter--;
+          continue;
+        }
+        if (e instanceof ThinkingBudget) {
+          this.wrapUp(e);
           iter--;
           continue;
         }
@@ -599,6 +631,12 @@ export class Agent {
       this.loopedThisRound = false;
       const results = await this.runTools(calls, badToolCalls, signal);
       this.o.session.append({ role: 'user', content: results }, this.id);
+      // What the next step is: a failed call or a loop needs thought; a round that went fine is routine.
+      this.keyStep = this.loopedThisRound
+        ? 'loop'
+        : results.some((b) => b.type === 'tool_result' && b.isError) || badToolCalls.size
+          ? 'error'
+          : undefined;
       this.emit({ type: 'context', tokens: this.promptTokens() });
       if (signal.aborted) return 'aborted';
       // Going round a loop is not progress, so it never uses up the tool-call limit and stops the work.
@@ -638,6 +676,26 @@ export class Agent {
           ? 'Kept what came before the repeats and asked it to carry on.'
           : 'Asked it to carry on.'),
     });
+  }
+
+  /**
+   * A step's reasoning ran past its budget. Hand the model where its reasoning got to and ask it to act on it,
+   * with reasoning off for that one request. Nothing is lost but the rest of the deliberation.
+   */
+  private wrapUp(e: ThinkingBudget): void {
+    this.thinkingStats.wrapped++;
+    this.emit({ type: 'assistant', message: { role: 'assistant', content: [] }, cut: true });
+    this.o.session.append({ role: 'user', content: [{ type: 'text', text: wrapUpNote(e) }] }, this.id);
+    this.wrapping = true;
+    if (!this.toldWrapUp) {
+      this.toldWrapUp = true;
+      this.emit({
+        type: 'status',
+        text:
+          `Reasoning wrapped up at its budget (${e.budget} tokens): the model carries on from where its reasoning ` +
+          'got to. /reasoning shows how often this happens and sets the budgets.',
+      });
+    }
   }
 
   /** The task the model is on, from its list, to name in a loop reminder. */
@@ -742,6 +800,8 @@ export class Agent {
         let res: CompactResult | undefined;
         try {
           res = await this.compactOnce(keep, signal, opts.instructions);
+          // After a compaction the model works from a summary: worth a moment's thought.
+          this.keyStep ??= 'compacted';
         } catch (e) {
           if (signal.aborted) throw e;
           failure = friendly(e);
@@ -808,6 +868,8 @@ export class Agent {
           signal,
           ...(instructions ? { instructions } : {}),
           onProgress: this.summaryProgress(),
+          // A summary needs no deliberation: outside "always", it is asked for without reasoning.
+          ...(this.o.config.reasoning.mode !== 'always' ? { noThinking: true } : {}),
           // The summary replaces the todo_write calls that held the list, so carry the list itself over.
           ...(this.todos.length
             ? {
@@ -878,6 +940,38 @@ export class Agent {
     const own = new AbortController();
     const extra = this.nextRequest;
     this.nextRequest = {};
+    // How much this step may reason (agent/thinking.ts), switched off the way this model's template reads.
+    const tcfg = this.o.config.reasoning;
+    const info =
+      tcfg.mode !== 'always' || this.o.config.reasoningEffort || extra.thinking === false
+        ? await m.provider.thinkingInfo?.(m.model, signal).catch(() => undefined)
+        : undefined;
+    const budget = this.wrapping
+      ? { tokens: undefined, key: false }
+      : stepBudget(tcfg, this.o.config.reasoningEffort, info?.switch, this.keyStep);
+    this.lastBudget = budget;
+    const thinkingOff = extra.thinking === false || this.wrapping || budget.tokens === 0;
+    this.wrapping = false;
+    this.thinkingStats.requests++;
+    if (thinkingOff) this.thinkingStats.off++;
+    if (budget.key) this.thinkingStats.key++;
+    const sampling = samplingFor(this.o.config.sampling, `${m.providerId}/${m.model}`);
+    if (
+      info?.temperature !== undefined &&
+      info.temperature <= 0.15 &&
+      info.reasons &&
+      !sampling?.temperature &&
+      !this.warnedGreedy
+    ) {
+      this.warnedGreedy = true;
+      this.emit({
+        type: 'status',
+        text:
+          `${m.model} is sampled almost greedily (temperature ${info.temperature}). Reasoning models then tend to ` +
+          'think in circles; their model cards recommend around 0.6 when reasoning. Set it on the server, or under ' +
+          '"sampling" in your config (docs/reasoning.md).',
+      });
+    }
     const stream = m.provider.stream({
       model: m.model,
       system: this.o.system(),
@@ -887,17 +981,24 @@ export class Agent {
       ...(this.o.config.thinkingBudget ? { thinkingBudget: this.o.config.thinkingBudget } : {}),
       ...(effort ? { reasoningEffort: effort } : {}),
       ...extra,
+      ...(thinkingOff ? { thinking: false as const } : {}),
+      ...(sampling ? { sampling } : {}),
       signal: AbortSignal.any([signal, own.signal]),
     });
     this.emit({ type: 'request' });
     this.emit({ type: 'context', tokens: used });
     const speed = new SpeedMeter((tps) => this.emit({ type: 'speed', tokensPerSecond: tps }));
-    const watched = this.watchToolCalls(speed.watch(stream));
+    let watched = this.watchToolCalls(speed.watch(stream));
+    if (!thinkingOff && budget.tokens !== undefined && budget.tokens > 0)
+      watched = watchBudget(watched, budget.tokens, () => own.abort());
     const r = await assemble(
       this.o.config.loopDetection ? watchRepeats(watched, () => own.abort()) : watched,
       {
         onText: (delta) => this.emit({ type: 'text', delta }),
-        onThinking: (delta) => this.emit({ type: 'thinking', delta }),
+        onThinking: (delta) => {
+          this.thinkingStats.reasoningTokens += delta.length / CHARS_PER_TOKEN;
+          this.emit({ type: 'thinking', delta });
+        },
       },
     );
     this.totalUsage.inputTokens += r.usage.inputTokens + (r.usage.cacheReadTokens ?? 0);

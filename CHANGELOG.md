@@ -4,6 +4,18 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Reasoning where it pays (`/reasoning`, `reasoning.mode`; [docs/reasoning.md](docs/reasoning.md)).**
+  - **Adaptive mode:** key steps (planning, after an error or loop, after a steer or a compaction) get a large
+    budget and routine steps a small one; a step past its budget is wrapped up with the model's own reasoning
+    handed back to act on, at most once.
+  - **Effort:** `/effort` now does something for models without effort levels (Qwen): it scales the key-step
+    budget.
+  - **Switching reasoning off:** done the way each model's template reads it (`enable_thinking`, `thinking`,
+    `reasoning_effort`), found from llama.cpp's `/props`, with a check through `/apply-template` that switching
+    keeps the cached conversation.
+  - **Summaries:** compaction summaries are written without reasoning outside `always`.
+  - **Sampling:** per-model `sampling` settings, and a warning when a reasoning model is sampled near-greedily.
+  - **Unchanged by default:** `always` with no budget unless `/effort` is set.
 - **Sentry mode (`/sentry`, off until you turn it on; [docs/sentry.md](docs/sentry.md)).** A defensive mode inspired
   by Shirudo's shields.
   - **Watch:** a baseline of this machine (accounts, admins, SSH keys and settings, setuid programs, listening ports,

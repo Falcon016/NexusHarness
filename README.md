@@ -54,6 +54,11 @@ It has **no default model**: you pick one, and the harness reads that model's re
   They message each other, hand off work and share notes; you watch live and can interject (`@builder use the new API`).
   Each member has its own persistent conversation with the same compaction and resume as the main agent, and a whole
   swarm resumes with `/swarm resume`. [Details](docs/swarm.md).
+- **Reasoning where it pays (`/reasoning adaptive`).** Planning, errors and being stuck get a large reasoning budget;
+  routine steps a small one. A step that runs past its budget is wrapped up: the model gets its own conclusions
+  back and acts on them. The harness reads each model's chat template to switch reasoning off the right way (Qwen,
+  DeepSeek, GLM, gpt-oss…) and checks the switch keeps the server's cache. Sampling can be set per model.
+  [Details](docs/reasoning.md).
 - **Sentry mode (`/sentry`).** A defensive mode: it watches this machine and your LAN for the changes an intruder
   makes (new accounts, SSH keys, setuid programs, listening ports, startup items, password guessing), has a sentry
   agent look into them, and puts up narrow, reversible shields. It blocks an attacking outside address or

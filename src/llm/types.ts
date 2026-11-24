@@ -1,3 +1,4 @@
+import type { ThinkingInfo } from './thinking.js';
 /** Provider-neutral conversation and streaming types. */
 
 export interface ImageData {
@@ -35,6 +36,15 @@ export interface Usage {
 
 /** Levels for `/effort`, low to high. */
 export const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+
+export interface Sampling {
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  presence_penalty?: number;
+  repeat_penalty?: number;
+}
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'other';
@@ -52,10 +62,13 @@ export interface StreamRequest {
   /** Reasoning effort for models that take one. Undefined: the model's default. */
   reasoningEffort?: ReasoningEffort;
   /**
-   * False: ask the model not to reason before answering, through the chat template's `enable_thinking` (which
-   * Qwen-style templates read). Used for one request after the model's reasoning went round in circles.
+   * False: ask the model not to reason before answering, with the switch its chat template reads (see
+   * llm/thinking.ts). Used for routine steps in adaptive thinking, after a reasoning budget is spent, and after
+   * reasoning went round in circles.
    */
   thinking?: false;
+  /** Sampling settings for this model, from the config. */
+  sampling?: Sampling;
   /**
    * 1–3: discourage repeating, more firmly at each level (a presence penalty). Used for the request after a
    * reply that started repeating itself; local servers only.
@@ -103,6 +116,8 @@ export interface Provider {
   listModels?(signal?: AbortSignal): Promise<ModelInfo[]>;
   /** How busy the server is; servers that report nothing give an empty object. */
   status?(signal?: AbortSignal): Promise<ServerStatus>;
+  /** How this model's reasoning is switched off, read from its chat template (cached per model). */
+  thinkingInfo?(model: string, signal?: AbortSignal): Promise<ThinkingInfo>;
 }
 
 /**

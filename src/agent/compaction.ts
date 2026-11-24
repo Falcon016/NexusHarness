@@ -90,6 +90,8 @@ export interface SummariseOptions {
   signal?: AbortSignal | undefined;
   /** Called as the summary streams in: its size so far, whether the model is still reasoning, which part. */
   onProgress?: ((p: SummaryProgress) => void) | undefined;
+  /** Ask for the summary without reasoning first (adaptive or no thinking). */
+  noThinking?: boolean | undefined;
 }
 
 export interface SummaryProgress {
@@ -117,6 +119,7 @@ async function ask(
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
       tools: [],
       maxTokens,
+      ...(o.noThinking ? { thinking: false as const } : {}),
       ...(o.signal ? { signal: o.signal } : {}),
     }),
     { onText: (d) => report(false, d.length), onThinking: (d) => report(true, d.length) },
@@ -211,6 +214,7 @@ export async function compact(opts: {
   /** Appended to the stored summary as is (the agent's current task list). */
   appendix?: string;
   onProgress?: (p: SummaryProgress) => void;
+  noThinking?: boolean;
 }): Promise<CompactResult | undefined> {
   const plan = planCompaction(opts.session, opts.keepRecent);
   if (!plan) return undefined;
@@ -223,6 +227,7 @@ export async function compact(opts: {
     after: plan.kept,
     onProgress: opts.onProgress,
     signal: opts.signal,
+    noThinking: opts.noThinking,
   });
   if (summary.length < 20) throw new CompactionError('The summary was too short to be trustworthy.');
 

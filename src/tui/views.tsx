@@ -717,6 +717,7 @@ export function Footer({
   swarmCount,
   queued,
   effort,
+  reasoning,
   sentry,
 }: {
   mode: ApprovalMode;
@@ -727,6 +728,8 @@ export function Footer({
   queued: number;
   /** The reasoning effort set with /effort; nothing is shown for the model's default. */
   effort?: string | undefined;
+  /** The reasoning mode; nothing is shown for "always". */
+  reasoning?: string | undefined;
   /** Sentry mode is on: how many findings are open. */
   sentry?: number | undefined;
 }) {
@@ -753,6 +756,9 @@ export function Footer({
     part('shift+tab', 9, <Text color={t.faint}>shift+tab</Text>),
     part(`sandbox ${sb}`, 6, <Text color={t.dim}>sandbox {sb}</Text>),
     ...(effort ? [part(`effort ${effort}`, 5, <Text color={t.sky}>effort {effort}</Text>)] : []),
+    ...(reasoning && reasoning !== 'always'
+      ? [part(`reasoning ${reasoning}`, 5, <Text color={t.sky}>reasoning {reasoning}</Text>)]
+      : []),
     ...(swarmCount ? [part(`swarm ×${swarmCount}`, 3, <Text color={t.rose}>swarm ×{swarmCount}</Text>)] : []),
     ...(sentry !== undefined
       ? [
