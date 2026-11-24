@@ -59,6 +59,11 @@ It has **no default model**: you pick one, and the harness reads that model's re
   back and acts on them. The harness reads each model's chat template to switch reasoning off the right way (Qwen,
   DeepSeek, GLM, gpt-oss…) and checks the switch keeps the server's cache. Sampling can be set per model.
   [Details](docs/reasoning.md).
+- **Sentry mode (`/sentry`).** A defensive mode: it watches this machine and your LAN for the changes an intruder
+  makes (new accounts, SSH keys, setuid programs, listening ports, startup items, password guessing), has a sentry
+  agent look into them, and puts up narrow, reversible shields. It blocks an attacking outside address or
+  quarantines a dropped file on its own; everything else asks you. Every action goes on a signed ledger, and alerts
+  reach the terminal, the dashboard and Telegram. Off until you turn it on. [Details](docs/sentry.md).
 - **Several machines as one (the mesh).** Point the harness at the model servers on your other machines and it uses
   them together: parallel `task`s on the best free machine, small fast models for easy work and big ones for hard
   work, a stronger model when something gets stuck, and another machine when one goes down. `nexus node` reports each

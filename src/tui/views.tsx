@@ -718,6 +718,7 @@ export function Footer({
   queued,
   effort,
   reasoning,
+  sentry,
 }: {
   mode: ApprovalMode;
   sandbox: string;
@@ -729,6 +730,8 @@ export function Footer({
   effort?: string | undefined;
   /** The reasoning mode; nothing is shown for "always". */
   reasoning?: string | undefined;
+  /** Sentry mode is on: how many findings are open. */
+  sentry?: number | undefined;
 }) {
   const t = useTheme();
   const { columns } = useDrawSize();
@@ -757,6 +760,17 @@ export function Footer({
       ? [part(`reasoning ${reasoning}`, 5, <Text color={t.sky}>reasoning {reasoning}</Text>)]
       : []),
     ...(swarmCount ? [part(`swarm ×${swarmCount}`, 3, <Text color={t.rose}>swarm ×{swarmCount}</Text>)] : []),
+    ...(sentry !== undefined
+      ? [
+          part(
+            sentry ? `sentry ${sentry} open` : 'sentry',
+            3,
+            <Text color={sentry ? t.gold : t.green} bold>
+              {sentry ? `sentry ${sentry} open` : 'sentry'}
+            </Text>,
+          ),
+        ]
+      : []),
     ...(snap.browser.open ? [part('browser', 4, <Text color={t.blue}>browser</Text>)] : []),
     ...(queued ? [part(`${queued} queued`, 1, <Text color={t.gold}>{queued} queued</Text>)] : []),
     ...(snap.showThinking

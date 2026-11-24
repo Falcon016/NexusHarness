@@ -66,6 +66,12 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   parallel?: boolean;
   /** The argument policy rules match against (command, path, URL...). */
   primaryArg?(input: z.infer<S>): string | undefined;
+  /**
+   * The tool's own say on approval, over the mode, allow rules and earlier "always" answers (deny rules and plan
+   * mode still win): `ask` every time, or `allow` without asking. Undefined: the usual policy decides. Sentry
+   * shields use it: the automatic kinds go ahead, every other one asks, whatever the mode.
+   */
+  approval?(input: z.infer<S>): { action: 'ask' | 'allow'; reason: string } | undefined;
   /** One-line summary for the transcript and approval prompt. */
   describe(input: z.infer<S>): string;
   /** Optional extra detail for the approval prompt (e.g. a diff). */
@@ -87,6 +93,7 @@ export interface AnyTool {
   /** JSON Schema override (used by MCP tools which bring their own schema). */
   jsonSchema?: Record<string, unknown>;
   primaryArg?(input: never): string | undefined;
+  approval?(input: never): { action: 'ask' | 'allow'; reason: string } | undefined;
   describe(input: never): string;
   preview?(input: never, ctx: ToolContext): Promise<string | undefined>;
   execute(input: never, ctx: ToolContext): Promise<ToolResult>;

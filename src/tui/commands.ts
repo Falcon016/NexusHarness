@@ -15,6 +15,7 @@ import { findSession, listSessions } from '../agent/history.js';
 import { MODE_STYLE } from './theme.js';
 import { formatNodes } from '../mesh/mesh.js';
 import { stepBudget } from '../agent/thinking.js';
+import { formatFindings } from '../sentry/tools.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../llm/types.js';
 import {
   builtinUrl,
@@ -434,6 +435,115 @@ export const BUILTINS: BuiltinCommand[] = [
         'Swarm  plain text goes to the lead; @name text addresses one agent; /swarm panes toggles split view',
       ];
       store.notice(lines.join('\n'));
+    },
+  },
+  {
+    name: 'sentry',
+    usage: 'sentry [on|off|status|sweep|shields|lift <id>|accept <id|all>|dismiss <id>|ledger|rebaseline]',
+    description:
+      'Defensive mode: watch this machine and the LAN, look into changes, put up reversible shields',
+    async run(args, { runtime, store }) {
+      const [sub = '', arg] = args.trim().split(/\s+/);
+      const rt = runtime;
+      if (sub === 'on' || (sub === '' && !rt.sentry?.on)) {
+        store.setStatus('Sentry: taking a look at this machine…');
+        try {
+          // Turning on says so through the sentry alert; anything else (not Linux, already on) is said here.
+          const text = await rt.sentryOn();
+          if (!text.startsWith('Sentry on')) store.notice(text, 'warn');
+        } finally {
+          store.setStatus(undefined);
+        }
+        return;
+      }
+      if (sub === 'off' || sub === '') {
+        if (!rt.sentry?.on) store.notice(rt.sentryOff());
+        else rt.sentryOff();
+        return;
+      }
+      const s = rt.sentry;
+      if (!s) {
+        store.notice('Sentry has not been on in this session. Turn it on with /sentry.');
+        return;
+      }
+      const when = (ms?: number) => (ms ? new Date(ms).toLocaleTimeString() : 'not yet');
+      switch (sub) {
+        case 'status': {
+          const st = s.status();
+          store.notice(
+            `Sentry ${st.on ? 'on' : 'off'} · last sweep ${when(st.lastSweep)}${st.on ? ` · next ${when(st.nextSweep)}` : ''}` +
+              ` · ledger ${st.ledger.ok ? `intact (${st.ledger.count})` : `BROKEN: ${st.ledger.why}`}` +
+              (st.networks.length ? `\nWatching ${st.networks.join(', ')}` : '') +
+              `\n${st.open.length ? `Open findings:\n${formatFindings(st.open)}` : 'No open findings.'}` +
+              (st.open.some((f) => f.report)
+                ? `\nLatest sentry report: ${st.open.find((f) => f.report)!.report}`
+                : '') +
+              (st.shields.length
+                ? `\nShields up:\n${st.shields.map((x) => `${x.id} ${x.kind} ${x.target} (${x.by})`).join('\n')}`
+                : ''),
+            st.ledger.ok ? 'info' : 'error',
+          );
+          return;
+        }
+        case 'sweep': {
+          store.setStatus('Sentry: sweeping…');
+          try {
+            const fresh = await s.sweep();
+            if (!fresh.length) store.notice('Sentry: nothing new since the last sweep.', 'success');
+          } finally {
+            store.setStatus(undefined);
+          }
+          return;
+        }
+        case 'shields': {
+          const list = s.store.all().filter((x) => x.status === 'active');
+          store.notice(
+            list.length
+              ? list
+                  .map(
+                    (x) =>
+                      `${x.id} ${x.kind} ${x.target} by ${x.by}${x.expires ? `, until ${when(x.expires)}` : ''}: ${x.reason}`,
+                  )
+                  .join('\n')
+              : 'No shields up.',
+          );
+          return;
+        }
+        case 'lift': {
+          if (!arg) return store.notice('Usage: /sentry lift <id>', 'warn');
+          const r = await s.lift(arg, 'user');
+          store.notice(r.text, r.ok ? 'success' : 'error');
+          return;
+        }
+        case 'accept': {
+          if (!arg) return store.notice('Usage: /sentry accept <id|all>', 'warn');
+          store.notice(await s.acceptFindings(arg), 'success');
+          return;
+        }
+        case 'dismiss': {
+          if (!arg) return store.notice('Usage: /sentry dismiss <id>', 'warn');
+          store.notice(s.dismiss(arg));
+          return;
+        }
+        case 'ledger': {
+          const v = s.ledger.verify();
+          const recent = s.ledger
+            .recent(12)
+            .map((e) => `#${e.seq} ${new Date(e.at).toLocaleString()} ${e.event}`);
+          store.notice(
+            `${v.ok ? `Ledger intact: ${v.count} entries.` : `Ledger BROKEN at entry ${v.at}: ${v.why}.`}\n${recent.join('\n')}`,
+            v.ok ? 'info' : 'error',
+          );
+          return;
+        }
+        case 'rebaseline': {
+          await s.rebaseline();
+          store.notice('Sentry: new baseline taken; everything as it is now counts as normal.', 'success');
+          return;
+        }
+        default:
+          store.notice(`Unknown: /sentry ${sub}. ${'Try /sentry status.'}`, 'warn');
+      }
     },
   },
   {

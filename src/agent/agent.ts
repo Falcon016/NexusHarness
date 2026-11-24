@@ -96,6 +96,8 @@ export interface ApprovalRequest {
   risk: string;
   preview?: string;
   grantLabel: string;
+  /** Offer no "don't ask again": this call asks every time. */
+  once?: boolean;
 }
 
 export interface ApprovalResponse {
@@ -327,6 +329,11 @@ export class Agent {
   get session(): Session {
     return this.o.session;
   }
+  /** Working on a turn right now. */
+  get busy(): boolean {
+    return this.running;
+  }
+
   setModel(m: ResolvedModel): void {
     this.o.model = m;
     this.reported = undefined;
@@ -1146,6 +1153,8 @@ export class Agent {
             risk: tool.risk,
             ...(preview ? { preview } : {}),
             grantLabel: describeGrant(key),
+            // A tool that asks every time: "don't ask again" would mean nothing.
+            ...(tool.approval?.(input as never) ? { once: true } : {}),
           },
           signal,
         );
@@ -1160,7 +1169,7 @@ export class Agent {
             name: call.name,
             reason: resp.feedback ?? 'denied by user',
           });
-        } else if (resp.always) this.o.policy.grant(tool, input);
+        } else if (resp.always && !tool.approval?.(input as never)) this.o.policy.grant(tool, input);
       }
     }
 
