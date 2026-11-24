@@ -118,6 +118,7 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
     runtime.events.on('mode', setMode);
     runtime.events.on('sandbox', setSandbox);
     runtime.events.on('effort', setEffort);
+    runtime.events.on('reasoning', () => force((n) => n + 1));
     runtime.events.on('todos', setTodos);
     runtime.events.on('model', () => force((n) => n + 1));
     runtime.broker.approvalHandler = (req, signal) =>
@@ -380,6 +381,7 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
           <Footer
             mode={mode}
             effort={effort}
+            reasoning={runtime.config.reasoning.mode}
             sandbox={sandbox}
             snap={snap}
             contextWindow={runtime.agent.model.contextWindow}

@@ -279,5 +279,6 @@ export function actionLoopNote(loop: ActionLoop, task?: string): string {
   return `\n\n${LOOP_NOTE} ${what}${then}${keep}`;
 }
 
-/** Messages the harness wrote to the model, not the user's own words. */
-export const isLoopNote = (text: string) => text.startsWith(LOOP_NOTE);
+/** Messages the harness wrote to the model (loop checks, reasoning wrap-ups), not the user's own words. */
+export const isLoopNote = (text: string) =>
+  text.startsWith(LOOP_NOTE) || text.startsWith('[Reasoning budget]');

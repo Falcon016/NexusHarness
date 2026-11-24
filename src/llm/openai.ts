@@ -11,6 +11,14 @@ import type {
   StreamRequest,
 } from './types.js';
 import { ProviderError } from './types.js';
+import {
+  cacheVerdict,
+  detectSwitch,
+  offFields,
+  PROBE_MESSAGES,
+  type ThinkingInfo,
+  type ThinkingSwitch,
+} from './thinking.js';
 
 export interface OpenAIOptions {
   id: string;
@@ -30,6 +38,73 @@ export class OpenAICompatProvider implements Provider {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
   }
 
+  /** What each model's template says about switching reasoning off (see thinkingInfo). */
+  private thinking = new Map<string, ThinkingInfo>();
+  private thinkingAsked = new Map<string, Promise<ThinkingInfo>>();
+
+  /**
+   * How this model's reasoning is switched off, read from its chat template, and whether switching keeps the
+   * cached conversation. Asked once per model; servers other than llama.cpp give `unknown`.
+   */
+  thinkingInfo(model: string, signal?: AbortSignal): Promise<ThinkingInfo> {
+    let p = this.thinkingAsked.get(model);
+    if (!p) {
+      p = this.readThinking(model, signal).then((info) => {
+        this.thinking.set(model, info);
+        return info;
+      });
+      this.thinkingAsked.set(model, p);
+    }
+    return p;
+  }
+
+  private async readThinking(model: string, signal?: AbortSignal): Promise<ThinkingInfo> {
+    if (/^https:\/\/api\.openai\.com\//.test(this.baseUrl))
+      return { switch: 'reasoning_effort', cache: 'unverified' };
+    const f = this.opts.fetchImpl ?? fetch;
+    const origin = this.baseUrl.replace(/\/v1$/, '');
+    const init = { headers: this.headers(), ...(signal ? { signal } : {}) };
+    // A router serves several models: ask about this one.
+    const props =
+      (await getJson<{
+        chat_template?: string;
+        default_generation_settings?: { params?: { temperature?: number } };
+      }>(f, `${origin}/props?model=${encodeURIComponent(model)}`, init)) ?? undefined;
+    const template = props?.chat_template;
+    const sw = detectSwitch(template);
+    const temperature = props?.default_generation_settings?.params?.temperature;
+    const base: ThinkingInfo = {
+      switch: sw,
+      cache: 'unverified',
+      ...(template
+        ? { reasons: /<think>|\[THINK\]|<\|channel\|>|reasoning_content|thinking/.test(template) }
+        : {}),
+      ...(typeof temperature === 'number' ? { temperature } : {}),
+    };
+    if (!template || sw === 'unknown') return base;
+    // Render the same conversation with reasoning on and off, and see where they part.
+    const render = async (on: boolean): Promise<string | undefined> => {
+      try {
+        const res = await f(`${origin}/apply-template`, {
+          method: 'POST',
+          headers: { ...this.headers(), 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages: PROBE_MESSAGES,
+            ...(on ? {} : { chat_template_kwargs: offFields(sw).kwargs }),
+          }),
+          ...(signal ? { signal } : {}),
+        });
+        if (!res.ok) return undefined;
+        return ((await res.json()) as { prompt?: string }).prompt;
+      } catch {
+        return undefined;
+      }
+    };
+    const [on, off] = await Promise.all([render(true), render(false)]);
+    return { ...base, cache: cacheVerdict(on, off) };
+  }
+
   private headers(): Record<string, string> {
     return {
       ...(this.opts.apiKey ? { authorization: `Bearer ${this.opts.apiKey}` } : {}),
@@ -41,7 +116,10 @@ export class OpenAICompatProvider implements Provider {
     const res = await postJsonStream({
       url: `${this.baseUrl}/chat/completions`,
       headers: this.headers(),
-      body: buildBody(req, { templateKwargs: !/^https:\/\/api\.openai\.com\//.test(this.baseUrl) }),
+      body: buildBody(req, {
+        templateKwargs: !/^https:\/\/api\.openai\.com\//.test(this.baseUrl),
+        switch: this.thinking.get(req.model)?.switch ?? 'unknown',
+      }),
       signal: req.signal,
       ...(this.opts.fetchImpl ? { fetchImpl: this.opts.fetchImpl } : {}),
     });
@@ -236,8 +314,15 @@ export function metric(text: string, name: string): number | undefined {
  */
 export function buildBody(
   req: StreamRequest,
-  opts: { templateKwargs?: boolean } = {},
+  opts: { templateKwargs?: boolean; switch?: ThinkingSwitch } = {},
 ): Record<string, unknown> {
+  // Reasoning off, the way this model's template understands (llm/thinking.ts).
+  const off = req.thinking === false && opts.templateKwargs ? offFields(opts.switch ?? 'unknown') : undefined;
+  const kwargs = {
+    ...(req.reasoningEffort ? { reasoning_effort: req.reasoningEffort } : {}),
+    ...(off?.kwargs ?? {}),
+  };
+  const s = req.sampling ?? {};
   const tools = req.tools.map((t) => ({
     type: 'function',
     function: { name: t.name, description: t.description, parameters: t.inputSchema },
@@ -249,17 +334,28 @@ export function buildBody(
     ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(req.reasoningEffort ? { reasoning_effort: req.reasoningEffort } : {}),
-    ...(opts.templateKwargs && (req.reasoningEffort || req.thinking === false)
+    ...(off?.body ?? {}),
+    ...(opts.templateKwargs && Object.keys(kwargs).length ? { chat_template_kwargs: kwargs } : {}),
+    // Sampling from the config. top_k, min_p and repeat_penalty are local-server extensions; OpenAI's API
+    // refuses fields it does not know, so it gets only the standard ones.
+    ...(s.temperature !== undefined && req.temperature === undefined ? { temperature: s.temperature } : {}),
+    ...(s.top_p !== undefined ? { top_p: s.top_p } : {}),
+    ...(opts.templateKwargs
       ? {
-          chat_template_kwargs: {
-            ...(req.reasoningEffort ? { reasoning_effort: req.reasoningEffort } : {}),
-            ...(req.thinking === false ? { enable_thinking: false } : {}),
-          },
+          ...(s.top_k !== undefined ? { top_k: s.top_k } : {}),
+          ...(s.min_p !== undefined ? { min_p: s.min_p } : {}),
+          ...(s.repeat_penalty !== undefined ? { repeat_penalty: s.repeat_penalty } : {}),
         }
       : {}),
-    // OpenAI's reasoning models refuse a presence penalty; local servers all take it.
-    ...(opts.templateKwargs && req.antiRepeat
-      ? { presence_penalty: Math.min(1.5, 0.5 * req.antiRepeat) }
+    // OpenAI's reasoning models refuse a presence penalty; local servers all take it. After a reply that
+    // repeated itself, the anti-repetition level wins over the configured value when it is higher.
+    ...(opts.templateKwargs && (req.antiRepeat || s.presence_penalty !== undefined)
+      ? {
+          presence_penalty: Math.max(
+            s.presence_penalty ?? 0,
+            req.antiRepeat ? Math.min(1.5, 0.5 * req.antiRepeat) : 0,
+          ),
+        }
       : {}),
     messages: [{ role: 'system', content: req.system }, ...req.messages.flatMap(toWire)],
     ...(tools.length ? { tools } : {}),

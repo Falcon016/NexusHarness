@@ -54,6 +54,11 @@ It has **no default model**: you pick one, and the harness reads that model's re
   They message each other, hand off work and share notes; you watch live and can interject (`@builder use the new API`).
   Each member has its own persistent conversation with the same compaction and resume as the main agent, and a whole
   swarm resumes with `/swarm resume`. [Details](docs/swarm.md).
+- **Reasoning where it pays (`/reasoning adaptive`).** Planning, errors and being stuck get a large reasoning budget;
+  routine steps a small one. A step that runs past its budget is wrapped up: the model gets its own conclusions
+  back and acts on them. The harness reads each model's chat template to switch reasoning off the right way (Qwen,
+  DeepSeek, GLM, gpt-oss…) and checks the switch keeps the server's cache. Sampling can be set per model.
+  [Details](docs/reasoning.md).
 - **Several machines as one (the mesh).** Point the harness at the model servers on your other machines and it uses
   them together: parallel `task`s on the best free machine, small fast models for easy work and big ones for hard
   work, a stronger model when something gets stuck, and another machine when one goes down. `nexus node` reports each

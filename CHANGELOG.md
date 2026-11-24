@@ -4,6 +4,18 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Reasoning where it pays (`/reasoning`, `reasoning.mode`; [docs/reasoning.md](docs/reasoning.md)).**
+  - **Adaptive mode:** key steps (planning, after an error or loop, after a steer or a compaction) get a large
+    budget and routine steps a small one; a step past its budget is wrapped up with the model's own reasoning
+    handed back to act on, at most once.
+  - **Effort:** `/effort` now does something for models without effort levels (Qwen): it scales the key-step
+    budget.
+  - **Switching reasoning off:** done the way each model's template reads it (`enable_thinking`, `thinking`,
+    `reasoning_effort`), found from llama.cpp's `/props`, with a check through `/apply-template` that switching
+    keeps the cached conversation.
+  - **Summaries:** compaction summaries are written without reasoning outside `always`.
+  - **Sampling:** per-model `sampling` settings, and a warning when a reasoning model is sampled near-greedily.
+  - **Unchanged by default:** `always` with no budget unless `/effort` is set.
 - **The mesh: several machines serving models, used as one** (`mesh`, off by default; [docs/mesh.md](docs/mesh.md)).
   - `task` runs self-contained work as helper agents in parallel on the best free machine, with fresh contexts; only their reports come back.
   - Work is matched to the size of model it needs (fast, standard, strong; set by the agent or guessed from the wording).

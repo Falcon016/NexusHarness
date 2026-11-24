@@ -147,6 +147,8 @@ export type RuntimeEvents = {
   model: string;
   /** The reasoning effort was changed (undefined: back to the model's default). */
   effort: ReasoningEffort | undefined;
+  /** The reasoning mode changed (/reasoning). */
+  reasoning: Config['reasoning']['mode'];
 };
 
 /** Everything the UIs need, assembled once. Shared by the TUI, print mode and RPC mode. */
@@ -586,6 +588,16 @@ export class Runtime {
       return effort ? { ...rest, reasoningEffort: effort } : rest;
     }, this.loaded.paths);
     this.events.emit('effort', effort);
+  }
+
+  /** How much models reason step by step (agent/thinking.ts), for every agent, saved in the user config. */
+  setReasoningMode(mode: Config['reasoning']['mode']): void {
+    this.config.reasoning = { ...this.config.reasoning, mode };
+    editUserConfig((c) => {
+      const t = (c as { reasoning?: Record<string, unknown> }).reasoning ?? {};
+      return { ...c, reasoning: { ...t, mode } };
+    }, this.loaded.paths);
+    this.events.emit('reasoning', mode);
   }
 
   setApprovalMode(mode: ApprovalMode): void {

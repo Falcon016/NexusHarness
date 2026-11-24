@@ -630,6 +630,7 @@ function renderTop() {
   mode.closest('.chip').dataset.mode = st.session.mode;
   $('#sandbox').value = st.session.sandbox;
   $('#effort').value = st.session.effort ?? 'default';
+  $('#reasoning').value = st.session.reasoning ?? 'always';
 
   const sel = $('#model');
   const want = st.session.model ?? '';
@@ -1340,6 +1341,12 @@ function wire() {
   $('#effort').addEventListener(
     'change',
     guard((e) => api(`/api/sessions/${S.id}/settings`, { method: 'POST', body: { effort: e.target.value } })),
+  );
+  $('#reasoning').addEventListener(
+    'change',
+    guard((e) =>
+      api(`/api/sessions/${S.id}/settings`, { method: 'POST', body: { reasoning: e.target.value } }),
+    ),
   );
   $('#model').addEventListener(
     'change',

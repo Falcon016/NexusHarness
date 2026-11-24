@@ -14,6 +14,7 @@ import { replayInto, type UiStore } from './store.js';
 import { findSession, listSessions } from '../agent/history.js';
 import { MODE_STYLE } from './theme.js';
 import { formatNodes } from '../mesh/mesh.js';
+import { stepBudget } from '../agent/thinking.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../llm/types.js';
 import {
   builtinUrl,
@@ -659,6 +660,71 @@ export const BUILTINS: BuiltinCommand[] = [
       }
       runtime.setReasoningEffort(choice === 'default' ? undefined : choice);
       store.notice(describe(runtime.config.reasoningEffort), 'success');
+    },
+  },
+  {
+    name: 'reasoning',
+    usage: 'reasoning [always|adaptive|never]',
+    description: 'How much models reason step by step, and how it is going this session',
+    async run(args, c) {
+      const { runtime, store } = c;
+      const a = args.trim().toLowerCase();
+      const modes = ['always', 'adaptive', 'never'] as const;
+      let choice: (typeof modes)[number] | undefined;
+      if (a) {
+        if (!(modes as readonly string[]).includes(a))
+          return store.notice('Usage: /reasoning always|adaptive|never', 'warn');
+        choice = a as (typeof modes)[number];
+      } else {
+        const cfg = runtime.config.reasoning;
+        const st = runtime.agent.thinkingStats;
+        const m = runtime.agent.model;
+        const info = await m.provider.thinkingInfo?.(m.model).catch(() => undefined);
+        const fmt = (n: number) => (n < 0 ? 'no limit' : n === 0 ? 'none' : `${n.toLocaleString()} tokens`);
+        store.notice(
+          `Reasoning: ${cfg.mode}` +
+            (cfg.mode === 'adaptive'
+              ? ` · key steps ${fmt(cfg.keyBudget)}, routine steps ${fmt(cfg.routineBudget)}`
+              : '') +
+            (runtime.config.reasoningEffort && info?.switch !== 'reasoning_effort'
+              ? ` · /effort ${runtime.config.reasoningEffort} makes ${cfg.mode === 'adaptive' ? 'key steps' : 'every step'} ${fmt(
+                  stepBudget(cfg, runtime.config.reasoningEffort, info?.switch, 'new message').tokens ?? -1,
+                )}`
+              : '') +
+            `\n${m.model}: ` +
+            (info
+              ? `reasoning switched off with ${info.switch === 'unknown' ? 'enable_thinking and thinking (no template to read)' : `\`${info.switch}\``}` +
+                (info.cache === 'safe'
+                  ? '; switching keeps the cached conversation'
+                  : info.cache === 'unsafe'
+                    ? '; WARNING: switching changes earlier turns, so each switch re-reads the conversation'
+                    : '')
+              : 'not checked yet') +
+            `\nThis session: ${st.requests} request${st.requests === 1 ? '' : 's'}, ${st.key} key step${st.key === 1 ? '' : 's'}, ` +
+            `${st.off} without reasoning, ${st.wrapped} wrapped up at the budget, ` +
+            `~${Math.round(st.reasoningTokens).toLocaleString()} reasoning tokens` +
+            (st.requests
+              ? ` (~${Math.round(st.reasoningTokens / st.requests).toLocaleString()} a request)`
+              : ''),
+        );
+        choice = await pick(
+          c,
+          'How much should models reason?',
+          [
+            { label: 'always', value: 'always' as const, hint: 'every step, as long as the model likes' },
+            {
+              label: 'adaptive',
+              value: 'adaptive' as const,
+              hint: 'more where it pays, less on routine steps',
+            },
+            { label: 'never', value: 'never' as const, hint: 'no reasoning: fastest' },
+          ].map((o) => ({ ...o, hint: o.value === cfg.mode ? `${o.hint} (current)` : o.hint })),
+          modes.indexOf(cfg.mode),
+        );
+        if (!choice) return;
+      }
+      runtime.setReasoningMode(choice);
+      store.notice(`Reasoning: ${choice}. Saved; applies from the next request.`, 'success');
     },
   },
   {

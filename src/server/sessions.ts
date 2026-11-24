@@ -59,6 +59,8 @@ export interface WebState {
     sandboxDescription: string;
     /** Reasoning effort set with /effort; null = each model's default. */
     effort: ReasoningEffort | null;
+    /** How much models reason step by step: always, adaptive or never. */
+    reasoning: 'always' | 'adaptive' | 'never';
     running: boolean;
     swarm: { active: boolean; id?: string; names: string[] };
   };
@@ -134,7 +136,7 @@ export class WebSession {
     this.store.attachAgent(rt.agent, 'main');
     if (rt.browser) this.store.attachBrowser(rt.browser.events);
     this.store.subscribe(() => this.push());
-    for (const e of ['mode', 'sandbox', 'todos', 'model', 'effort'] as const)
+    for (const e of ['mode', 'sandbox', 'todos', 'model', 'effort', 'reasoning'] as const)
       rt.events.on(e, () => this.push(true));
     rt.broker.approvalHandler = (req, signal) =>
       new Promise<ApprovalResponse>((resolveApproval) => {
@@ -191,6 +193,7 @@ export class WebSession {
         sandbox: rt.sandbox.mode,
         sandboxDescription: rt.sandbox.describe(),
         effort: rt.config.reasoningEffort ?? null,
+        reasoning: rt.config.reasoning.mode,
         running: rt.agent.isRunning || !!swarm?.roster().some((t) => t.running),
         swarm: { active: !!swarm, ...(swarm?.id ? { id: swarm.id } : {}), names: swarm?.names ?? [] },
       },
@@ -298,8 +301,14 @@ export class WebSession {
     sandbox?: unknown;
     model?: unknown;
     effort?: unknown;
+    reasoning?: unknown;
   }): Promise<void> {
     const rt = this.runtime;
+    if (body.reasoning !== undefined) {
+      const t = String(body.reasoning);
+      if (!['always', 'adaptive', 'never'].includes(t)) throw new HttpError(400, 'Invalid reasoning mode');
+      rt.setReasoningMode(t as 'always' | 'adaptive' | 'never');
+    }
     if (body.effort !== undefined) {
       const e = String(body.effort);
       if (e !== 'default' && !(REASONING_EFFORTS as readonly string[]).includes(e))

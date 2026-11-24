@@ -73,6 +73,38 @@ export const configSchema = z.object({
   /** Output tokens per model call. 0 (the default) = all the room left in the context window after the prompt. */
   maxTokens: z.number().int().min(0).default(0),
   thinkingBudget: z.number().int().min(0).default(0),
+  /**
+   * How much reasoning models think, step by step (docs/reasoning.md). "always": every step, as the model likes
+   * (a budget applies only when /effort is set); "adaptive": the steps that need it (planning, after an error,
+   * when stuck) get a large budget, routine steps a small one; "never": no reasoning. A step that runs past its
+   * budget is wrapped up: the model is given where its reasoning got to and asked to act on it.
+   */
+  reasoning: z
+    .object({
+      mode: z.enum(['always', 'adaptive', 'never']).default('always'),
+      /** Reasoning tokens for a routine step (after successful tool calls). 0: none; -1: no limit. */
+      routineBudget: z.number().int().min(-1).default(1024),
+      /** Reasoning tokens for a step that needs thought (planning, after an error, when stuck). -1: no limit. */
+      keyBudget: z.number().int().min(-1).default(8192),
+    })
+    .default({ mode: 'always', routineBudget: 1024, keyBudget: 8192 }),
+  /**
+   * Sampling per model, by `<provider>/<model>` pattern (`*` matches anything), as the model card recommends.
+   * Sent with every request; top_k, min_p and repeat_penalty only to local servers.
+   */
+  sampling: z
+    .record(
+      z.string(),
+      z.object({
+        temperature: z.number().min(0).max(2).optional(),
+        top_p: z.number().min(0).max(1).optional(),
+        top_k: z.number().int().min(0).optional(),
+        min_p: z.number().min(0).max(1).optional(),
+        presence_penalty: z.number().min(-2).max(2).optional(),
+        repeat_penalty: z.number().min(0).max(2).optional(),
+      }),
+    )
+    .default({}),
   /** How hard reasoning models think: `/effort`. Unset = the model's own default (nothing is sent). */
   reasoningEffort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
   providers: z.record(z.string(), providerSchema).default({}),
