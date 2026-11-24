@@ -351,6 +351,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       case 'browser':
         await s.browser(str('action'));
         return json(res, 200, { ok: true });
+      case 'sentry':
+        return json(res, 200, { text: await s.sentry(str('action'), str('id') || undefined) });
       case 'new':
         s.newConversation();
         return json(res, 200, { ok: true });

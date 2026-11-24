@@ -120,6 +120,13 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
     runtime.events.on('effort', setEffort);
     runtime.events.on('todos', setTodos);
     runtime.events.on('model', () => force((n) => n + 1));
+    runtime.events.on('sentry', (a) => {
+      store.notice(
+        a.text,
+        a.level === 'critical' || a.level === 'high' ? 'error' : a.level === 'medium' ? 'warn' : 'info',
+      );
+      force((n) => n + 1);
+    });
     runtime.broker.approvalHandler = (req, signal) =>
       new Promise<ApprovalResponse>((resolve) => {
         const done = (r: ApprovalResponse) => {
@@ -384,6 +391,7 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
             snap={snap}
             contextWindow={runtime.agent.model.contextWindow}
             swarmCount={runtime.swarm?.names.length ?? 0}
+            sentry={runtime.sentry?.on ? runtime.sentry.status().open.length : undefined}
             queued={snap.queued}
           />
         </Box>

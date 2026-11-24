@@ -1418,3 +1418,20 @@ dialog .row {
 .m-swarm {
   color: var(--accent-text);
 }
+
+/* Sentry findings by severity. */
+.dot.sev-critical,
+.dot.sev-high {
+  background: var(--red);
+}
+.dot.sev-medium {
+  background: var(--amber);
+}
+.dot.sev-low {
+  background: var(--fg-3);
+}
+
+/* Sentry card: paths and key fingerprints break anywhere rather than run out of the card. */
+.pcard .wrap {
+  overflow-wrap: anywhere;
+}

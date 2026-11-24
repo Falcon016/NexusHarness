@@ -857,6 +857,99 @@ function diffNodes(lines) {
 // ------------------------------------------------------------------------------------------------ side panel
 const gib = (mib) => (mib >= 1024 ? `${(mib / 1024).toFixed(1)} GB` : `${mib} MB`);
 
+const sentryAct = (action, id) =>
+  guard(() =>
+    api(`/api/sessions/${S.id}/sentry`, { method: 'POST', body: { action, ...(id ? { id } : {}) } }),
+  )();
+
+/** Sentry mode: on or off, what it found, the shields that are up, and the latest alerts. */
+function sentryCard(se) {
+  if (!se?.on)
+    return h(
+      'div',
+      { class: 'pcard' },
+      h('h4', { text: 'Sentry' }),
+      h('p', {
+        class: 'note',
+        text: 'Watch this machine and your LAN for the changes an intruder makes, and put up reversible shields.',
+      }),
+      h('button', { class: 'btn small', onclick: () => sentryAct('on'), text: 'Turn on sentry' }),
+    );
+  return h(
+    'div',
+    { class: 'pcard' },
+    h('h4', { text: `Sentry · ${se.ledgerOk ? 'on' : 'on · ledger broken'}` }),
+    h('span', {
+      class: 'role',
+      text: `Last sweep ${se.lastSweep ? new Date(se.lastSweep).toLocaleTimeString() : 'not yet'}${se.networks.length ? ` · ${se.networks.join(', ')}` : ''}`,
+    }),
+    // The sentry agent's latest report, once: it covers several findings at a time.
+    se.open.find((f) => f.report)
+      ? h('p', { class: 'note', text: se.open.find((f) => f.report).report })
+      : null,
+    se.open.length
+      ? se.open.slice(0, 8).map((f) =>
+          h(
+            'div',
+            { class: 'agent' },
+            h('span', {
+              class: `dot sev-${f.severity}`,
+              title: f.severity,
+            }),
+            h(
+              'div',
+              null,
+              h('span', { class: 'wrap', text: f.title }),
+              h(
+                'span',
+                { class: 'role' },
+                h('button', {
+                  class: 'btn small ghost',
+                  onclick: () => sentryAct('accept', f.id),
+                  text: 'Accept as normal',
+                }),
+                h('button', {
+                  class: 'btn small ghost',
+                  onclick: () => sentryAct('dismiss', f.id),
+                  text: 'Dismiss',
+                }),
+              ),
+            ),
+          ),
+        )
+      : h('p', { class: 'note', text: 'Nothing has changed since the baseline.' }),
+    se.shields.length ? h('h4', { text: 'Shields up' }) : null,
+    se.shields.map((x) =>
+      h(
+        'div',
+        { class: 'agent' },
+        h('span', { class: 'dot run' }),
+        h(
+          'div',
+          null,
+          // A long path: its file name, the full path on hover.
+          h('strong', {
+            class: 'wrap',
+            title: x.target,
+            text: `${x.kind} ${x.target.length > 48 ? `…/${x.target.split('/').pop()}` : x.target}`,
+          }),
+          h('span', {
+            class: 'role',
+            text: `${x.by}${x.expires ? ` · until ${new Date(x.expires).toLocaleTimeString()}` : ''} · ${x.reason}`,
+          }),
+          h('button', { class: 'btn small ghost', onclick: () => sentryAct('lift', x.id), text: 'Lift' }),
+        ),
+      ),
+    ),
+    h(
+      'div',
+      { class: 'row' },
+      h('button', { class: 'btn small', onclick: () => sentryAct('sweep'), text: 'Sweep now' }),
+      h('button', { class: 'btn small ghost', onclick: () => sentryAct('off'), text: 'Turn off' }),
+    ),
+  );
+}
+
 /** The mesh: each machine, whether it is up, its GPUs and memory, and the models it serves. */
 function nodesCard(nodes) {
   return h(
@@ -915,7 +1008,8 @@ function renderPanel() {
   const hasTodos = todos.length && !todos.every((t) => t.status === 'completed');
   const swarm = st?.session.swarm.active;
   const browser = st?.browser.open;
-  const show = !!st && (S.pinned || hasTodos || swarm || browser);
+  const sentryOn = st?.sentry?.on;
+  const show = !!st && (S.pinned || hasTodos || swarm || browser || sentryOn);
   $('#app').classList.toggle('with-panel', show);
   panel.hidden = !show;
   // Below 1100px the panel is an overlay that only shows with .open; without this the Panel button did nothing there.
@@ -1018,6 +1112,7 @@ function renderPanel() {
       ),
     );
   }
+  if (st) cards.push(sentryCard(st.sentry));
   if (S.nodes?.length) cards.push(nodesCard(S.nodes));
   if (browser) {
     const holder = st.browser.holder;

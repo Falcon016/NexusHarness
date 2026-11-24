@@ -54,6 +54,11 @@ It has **no default model**: you pick one, and the harness reads that model's re
   They message each other, hand off work and share notes; you watch live and can interject (`@builder use the new API`).
   Each member has its own persistent conversation with the same compaction and resume as the main agent, and a whole
   swarm resumes with `/swarm resume`. [Details](docs/swarm.md).
+- **Sentry mode (`/sentry`).** A defensive mode: it watches this machine and your LAN for the changes an intruder
+  makes (new accounts, SSH keys, setuid programs, listening ports, startup items, password guessing), has a sentry
+  agent look into them, and puts up narrow, reversible shields. It blocks an attacking outside address or
+  quarantines a dropped file on its own; everything else asks you. Every action goes on a signed ledger, and alerts
+  reach the terminal, the dashboard and Telegram. Off until you turn it on. [Details](docs/sentry.md).
 - **Several machines as one (the mesh).** Point the harness at the model servers on your other machines and it uses
   them together: parallel `task`s on the best free machine, small fast models for easy work and big ones for hard
   work, a stronger model when something gets stuck, and another machine when one goes down. `nexus node` reports each
