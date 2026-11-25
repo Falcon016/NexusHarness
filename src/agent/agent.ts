@@ -335,6 +335,11 @@ export class Agent {
   }
 
   setModel(m: ResolvedModel): void {
+    // A small model that was the same as the old model meant "the same model": it follows the switch, so a
+    // compaction does not make a one-model server load the old model again.
+    const s = this.o.smallModel;
+    if (s && s.providerId === this.o.model.providerId && s.model === this.o.model.model)
+      delete this.o.smallModel;
     this.o.model = m;
     this.reported = undefined;
     // Chosen by the user: no automatic switch back.

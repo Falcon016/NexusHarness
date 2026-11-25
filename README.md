@@ -142,25 +142,25 @@ takes an API key, and checks it before saving. Or set it in your config, e.g. a 
 Context windows are detected from the server (llama.cpp router/`/props`, LM Studio, Ollama `/api/ps`). If a server does
 not report one, 32,768 tokens is assumed and you are told; set `"contextWindows": { "<provider>/<model>": 100000 }`.
 
-| Command                                       | What it does                                                       |
-| --------------------------------------------- | ------------------------------------------------------------------ |
-| `/model [provider/model]`                     | Pick a model (lists what your providers offer)                     |
-| `/login [provider]` · `/logout [provider]`    | Swap a server address or add one; save or remove an API key        |
-| `/mode [ask\|edits\|auto\|plan]`              | Approval mode                                                      |
-| `/sandbox [off\|guard\|container]`            | Sandbox level                                                      |
-| `/swarm duo\|trio\|quad\|custom`              | Start a team (2, 3 or 4 agents, or one you put together)           |
-| `/nodes`                                      | The machines on the mesh: up or down, GPUs, models, how busy       |
-| `/swarm limit [n\|off]`                       | How long a team may work before checking in (saved to your config) |
-| `/swarm config\|resume\|stop\|panes`          | Your saved team; resume or stop a team; toggle split panes         |
-| `/browser [status\|takeover\|release\|close]` | Live browser control                                               |
-| `/tree` · `/resume [id]` · `/clear`           | Branch from an earlier message · resume · start fresh              |
-| `/flush [all\|<days>] [everywhere]`           | Delete old saved conversations and swarms (asks first)             |
-| `/thinking [on\|off]` (ctrl+t)                | Show or hide each agent's reasoning                                |
-| `/update`                                     | Update NexusHarness (also `nexus update` in a shell)               |
-| `/compact [focus]`                            | Summarise older context now (it also happens by itself)            |
-| `/skills` · `/tools` · `/mcp`                 | Inspect what is loaded                                             |
-| `/export [file]`                              | Save the conversation as Markdown                                  |
-| `/trust`                                      | Trust this project's `.nexusharness` config                        |
+| Command                                       | What it does                                                        |
+| --------------------------------------------- | ------------------------------------------------------------------- |
+| `/model [provider/model]`                     | Pick a model (lists what your providers offer); saved for next time |
+| `/login [provider]` · `/logout [provider]`    | Swap a server address or add one; save or remove an API key         |
+| `/mode [ask\|edits\|auto\|plan]`              | Approval mode                                                       |
+| `/sandbox [off\|guard\|container]`            | Sandbox level                                                       |
+| `/swarm duo\|trio\|quad\|custom`              | Start a team (2, 3 or 4 agents, or one you put together)            |
+| `/nodes`                                      | The machines on the mesh: up or down, GPUs, models, how busy        |
+| `/swarm limit [n\|off]`                       | How long a team may work before checking in (saved to your config)  |
+| `/swarm config\|resume\|stop\|panes`          | Your saved team; resume or stop a team; toggle split panes          |
+| `/browser [status\|takeover\|release\|close]` | Live browser control                                                |
+| `/tree` · `/resume [id]` · `/clear`           | Branch from an earlier message · resume · start fresh               |
+| `/flush [all\|<days>] [everywhere]`           | Delete old saved conversations and swarms (asks first)              |
+| `/thinking [on\|off]` (ctrl+t)                | Show or hide each agent's reasoning                                 |
+| `/update`                                     | Update NexusHarness (also `nexus update` in a shell)                |
+| `/compact [focus]`                            | Summarise older context now (it also happens by itself)             |
+| `/skills` · `/tools` · `/mcp`                 | Inspect what is loaded                                              |
+| `/export [file]`                              | Save the conversation as Markdown                                   |
+| `/trust`                                      | Trust this project's `.nexusharness` config                         |
 
 ### Web dashboard
 

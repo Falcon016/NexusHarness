@@ -19,6 +19,8 @@ export interface LoadedConfig {
   projectConfigPath?: string;
   projectTrusted: boolean;
   paths: AppPaths;
+  /** Where `model` came from, when something above the user config sets it (a saved pick would not apply). */
+  modelOverride?: 'flag' | 'env' | 'project';
 }
 
 const LIST_KEYS = new Set(['rules', 'denyPaths', 'allowPaths', 'allowedHosts', 'blockedHosts', 'agents']);
@@ -76,9 +78,18 @@ export function loadConfig(opts: LoadOptions): LoadedConfig {
     const detail = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
     throw new Error(`Invalid configuration: ${detail}`);
   }
+  const fromEnvModel = fromEnv(env).model;
+  const modelOverride = opts.overrides?.model
+    ? ('flag' as const)
+    : fromEnvModel
+      ? ('env' as const)
+      : typeof project.model === 'string'
+        ? ('project' as const)
+        : undefined;
   return {
     config: parsed.data,
     warnings,
+    ...(modelOverride ? { modelOverride } : {}),
     userConfigPath,
     ...(projectConfigPath ? { projectConfigPath } : {}),
     projectTrusted,

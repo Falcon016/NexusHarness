@@ -780,11 +780,40 @@ export class Runtime {
     return m.providerId === 'none' ? undefined : `${m.providerId}/${m.model}`;
   }
 
-  async setModel(spec: string): Promise<ResolvedModel> {
+  /**
+   * Switch the model. `save` (a model the user picked) also makes it the model the next session starts with, in
+   * the user config; a `smallModel` that was the same as the old model follows it, so compaction does not make
+   * a single-model server load the old one again.
+   */
+  async setModel(spec: string, opts: { save?: boolean } = {}): Promise<ResolvedModel> {
     const m = await this.registry.resolveDetected(spec);
+    const before = this.modelSpec;
     this.agent.setModel(m);
+    if (opts.save) {
+      editUserConfig((c) => {
+        const out: PartialConfig = { ...c, model: spec };
+        if (typeof c.smallModel === 'string' && (c.smallModel === c.model || c.smallModel === before))
+          out.smallModel = spec;
+        return out;
+      }, this.loaded.paths);
+      this.config.model = spec;
+    }
     this.events.emit('model', spec);
     return m;
+  }
+
+  /** Why a saved model pick will not be the one the next session starts with, if something overrides it. */
+  get modelSaveNote(): string | undefined {
+    switch (this.loaded.modelOverride) {
+      case 'flag':
+        return 'Saved for next time, but this session was started with --model, which wins when it is given.';
+      case 'env':
+        return 'Saved, but NEXUS_MODEL is set in your environment and still wins at startup: unset it to use the saved model.';
+      case 'project':
+        return `Saved, but this folder's project config (${this.loaded.projectConfigPath}) sets "model", which wins here.`;
+      default:
+        return undefined;
+    }
   }
 
   /** Every model the configured providers offer right now (unreachable providers are skipped). */

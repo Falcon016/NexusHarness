@@ -4,6 +4,9 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **The model you pick is remembered.** `/model` (and the dashboard and Telegram) saves the choice, so new sessions
+  and the restart after an update start with it instead of the model setup first saved. A `smallModel` that was the
+  same model follows it. If `--model`, `NEXUS_MODEL` or a project config would still override it, you're told.
 - **Reasoning where it pays (`/reasoning`, `reasoning.mode`; [docs/reasoning.md](docs/reasoning.md)).**
   - **Adaptive mode:** key steps (planning, after an error or loop, after a steer or a compaction) get a large
     budget and routine steps a small one; a step past its budget is wrapped up with the model's own reasoning

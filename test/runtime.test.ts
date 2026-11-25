@@ -194,6 +194,55 @@ describe('runtime with the mock server', () => {
     }
   });
 
+  it('starts the next session with the model the user picked, and a matching small model follows it', async () => {
+    const { ws, boot } = setup({ model: 'mock/old', smallModel: 'mock/old' });
+    const configFile = join(ws.dir, '.home', 'config', 'config.json');
+    const first = await boot();
+    try {
+      // A switch the harness makes for itself (a reconnect) is not saved.
+      await first.setModel('mock/other');
+      expect(JSON.parse(readFileSync(configFile, 'utf8')).model).toBe('mock/old');
+      await first.setModel('mock/old');
+      await first.setModel('mock/new', { save: true });
+      expect(first.modelSaveNote).toBeUndefined();
+      const saved = JSON.parse(readFileSync(configFile, 'utf8'));
+      expect(saved.model).toBe('mock/new');
+      expect(saved.smallModel).toBe('mock/new');
+      expect(first.agent.smallModelResolved).toBeUndefined(); // compaction uses mock/new now
+    } finally {
+      await first.dispose();
+    }
+    const second = await boot();
+    try {
+      expect(second.modelSpec).toBe('mock/new');
+    } finally {
+      await second.dispose();
+    }
+    // Started with --model: the pick is saved, and the user is told the flag still wins when given.
+    const third = await boot({ model: 'mock/flag' });
+    try {
+      await third.setModel('mock/picked', { save: true });
+      expect(third.modelSaveNote).toContain('--model');
+    } finally {
+      await third.dispose();
+      ws.cleanup();
+    }
+  });
+
+  it('keeps a small model chosen on purpose when the model changes', async () => {
+    const { ws, boot } = setup({ model: 'mock/big', smallModel: 'mock/tiny' });
+    const rt = await boot();
+    try {
+      await rt.setModel('mock/bigger', { save: true });
+      const saved = JSON.parse(readFileSync(join(ws.dir, '.home', 'config', 'config.json'), 'utf8'));
+      expect(saved.smallModel).toBe('mock/tiny');
+      expect(rt.agent.smallModelResolved?.model).toBe('tiny');
+    } finally {
+      await rt.dispose();
+      ws.cleanup();
+    }
+  });
+
   it('persists a swarm and resumes it with channel history, notes, and each member’s own context', async () => {
     const { ws, boot } = setup({ model: 'mock/m' });
     const first = await boot();
