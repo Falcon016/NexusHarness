@@ -353,7 +353,7 @@ class ChatSession {
           ));
         if (agent.isRunning) return void (await this.say('Stop the current task first (/stop).'));
         try {
-          await rt.setModel(arg);
+          await rt.setModel(arg, { save: true });
           await this.say(`Switched to <b>${escapeHtml(arg)}</b>.`);
         } catch (e) {
           await this.say(`Could not switch: ${escapeHtml((e as Error).message)}`);

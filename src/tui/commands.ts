@@ -213,11 +213,12 @@ async function login(c: CmdCtx, arg: string): Promise<void> {
   );
   if (!spec || (spec === current && !saved.reconnectError)) return;
   try {
-    const m = await runtime.setModel(spec);
+    const m = await runtime.setModel(spec, { save: true });
     store.notice(
       `Model → ${spec} · context ${m.contextWindow.toLocaleString()} tokens (${m.contextSource})`,
       'success',
     );
+    if (runtime.modelSaveNote) store.notice(runtime.modelSaveNote, 'warn');
   } catch (e) {
     store.notice((e as Error).message, 'error');
   }
@@ -565,16 +566,17 @@ export const BUILTINS: BuiltinCommand[] = [
   {
     name: 'model',
     usage: 'model [provider/model]',
-    description: 'Pick the model',
+    description: 'Pick the model (saved: new sessions start with it)',
     async run(args, { runtime, store, overlay }) {
       const choose = async (spec: string) => {
         try {
-          const m = await runtime.setModel(spec);
+          const m = await runtime.setModel(spec, { save: true });
           const ctx = m.contextWindow.toLocaleString();
           store.notice(
             `Model → ${spec} · context ${ctx} tokens (${m.contextSource}) · compaction at ${Math.round(runtime.agent.limits().target).toLocaleString()}`,
             'success',
           );
+          if (runtime.modelSaveNote) store.notice(runtime.modelSaveNote, 'warn');
         } catch (e) {
           store.notice((e as Error).message, 'error');
         }

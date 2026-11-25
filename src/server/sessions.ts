@@ -394,7 +394,7 @@ export class WebSession {
     }
     if (body.model !== undefined) {
       try {
-        await rt.setModel(String(body.model));
+        await rt.setModel(String(body.model), { save: true });
       } catch (e) {
         throw new HttpError(400, (e as Error).message);
       }
