@@ -230,7 +230,7 @@ describe('runtime with the mock server', () => {
     }
   });
 
-  it('puts learned lessons and skills in the main prompt only when learning is on, within its budget', async () => {
+  it('puts learned lessons and skills in the main prompt by default, within its budget, until turned off', async () => {
     const { ws, boot, work } = setup({ model: 'mock/qwen3.8-27b' });
     const data = join(ws.dir, '.home', 'data');
     new LessonFile(join(data, 'learning', 'projects', `${projectKey(work)}.json`)).add(
@@ -246,19 +246,17 @@ describe('runtime with the mock server', () => {
     );
     const rt = await boot();
     try {
-      expect(rt.systemPrompt('main')).not.toContain('Lessons from earlier sessions');
-      expect(rt.skills.names()).not.toContain('release');
-      rt.setLearning(true);
       const prompt = rt.systemPrompt('main');
       expect(prompt).toContain('Run tests with `npx vitest run`.');
       expect(prompt).toContain('- release: Build a release');
       expect(rt.learnedTokens()).toBeGreaterThan(0);
       expect(rt.learnedTokens()).toBeLessThanOrEqual(600);
+      rt.setLearning(false);
+      expect(rt.systemPrompt('main')).not.toContain('Lessons from earlier sessions');
+      expect(rt.skills.names()).not.toContain('release');
       expect(
         JSON.parse(readFileSync(join(ws.dir, '.home', 'config', 'config.json'), 'utf8')).learning,
-      ).toEqual({
-        enabled: true,
-      });
+      ).toEqual({ enabled: false });
     } finally {
       await rt.dispose();
       ws.cleanup();

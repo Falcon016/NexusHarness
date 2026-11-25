@@ -62,7 +62,7 @@ It has **no default model**: you pick one, and the harness reads that model's re
 - **Learning from tool calls (`/lessons on`).** When a tool call fails and the model fixes it, the model writes a
   one-line lesson. The lesson comes back the next time that failure happens, or up front in later sessions within a
   small token budget. Long tasks that went well can be saved as skills. The harness keeps only the lessons that
-  actually help. No training, off by default. [Details](docs/learning.md).
+  actually help. No training; on by default (`/lessons off` turns it off). [Details](docs/learning.md).
 - **Sentry mode (`/sentry`).** A defensive mode: it watches this machine and your LAN for the changes an intruder
   makes (new accounts, SSH keys, setuid programs, listening ports, startup items, password guessing), has a sentry
   agent look into them, and puts up narrow, reversible shields. It blocks an attacking outside address or

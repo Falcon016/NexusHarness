@@ -4,7 +4,7 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
-- **Learning from tool calls (`/lessons`, `learning`; [docs/learning.md](docs/learning.md)).** Off by default.
+- **Learning from tool calls (`/lessons`, `learning`; [docs/learning.md](docs/learning.md)).** On by default (`/lessons off`).
   - A tool call that failed and was then fixed becomes a one-line lesson, kept per project or per model family.
   - Lessons come back with the same failure, or up front within a token budget fixed for each conversation, so the
     server's cache stays valid.

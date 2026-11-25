@@ -2,10 +2,10 @@
 
 Local models make the same tool-call mistakes again and again: a command that hangs in this project, an argument they keep leaving out, an edit that never matches. With learning on, NexusHarness remembers what fixed each mistake and hands it back next time. It doesn't train or change the model. It learns by writing short notes and loading them again later.
 
-It's off until you turn it on:
+It's on by default. To turn it off (saved), run:
 
 ```
-/lessons on
+/lessons off
 ```
 
 The dashboard has a **Learning** selector too. The footer shows `learning` while it's on.
@@ -71,7 +71,7 @@ From its menu you can turn learning on or off, delete a lesson or a skill, or sa
 | Command          | What it does                                                       |
 | ---------------- | ------------------------------------------------------------------ |
 | `/lessons`       | Show what has been learned; menu to delete or switch               |
-| `/lessons on`    | Turn learning on (saved)                                           |
+| `/lessons on`    | Turn learning back on (saved)                                      |
 | `/lessons off`   | Turn it off (saved). What was learned is kept                      |
 | `/lessons save`  | Draft a skill from the last long task, then save or discard it     |
 | `/lessons clear` | Delete every lesson for this project and model family (asks first) |
@@ -95,7 +95,7 @@ From its menu you can turn learning on or off, delete a lesson or a skill, or sa
 
 | Setting                    | Default | What it does                                                         |
 | -------------------------- | ------- | -------------------------------------------------------------------- |
-| `learning.enabled`         | `false` | Learn from tool calls (`/lessons on`)                                |
+| `learning.enabled`         | `true`  | Learn from tool calls (`/lessons off` turns it off)                  |
 | `learning.budget`          | `600`   | Prompt tokens learned lessons and skills may take, together          |
 | `learning.maxLessons`      | `30`    | Lessons kept per project and per model family                        |
 | `learning.skillAfterCalls` | `8`     | Offer to save a task as a skill after this many tool calls; 0: never |
