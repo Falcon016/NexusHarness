@@ -631,6 +631,7 @@ function renderTop() {
   $('#sandbox').value = st.session.sandbox;
   $('#effort').value = st.session.effort ?? 'default';
   $('#reasoning').value = st.session.reasoning ?? 'always';
+  $('#learning').value = st.session.learning ? 'on' : 'off';
 
   const sel = $('#model');
   const want = st.session.model ?? '';
@@ -1441,6 +1442,12 @@ function wire() {
     'change',
     guard((e) =>
       api(`/api/sessions/${S.id}/settings`, { method: 'POST', body: { reasoning: e.target.value } }),
+    ),
+  );
+  $('#learning').addEventListener(
+    'change',
+    guard((e) =>
+      api(`/api/sessions/${S.id}/settings`, { method: 'POST', body: { learning: e.target.value === 'on' } }),
     ),
   );
   $('#model').addEventListener(

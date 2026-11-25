@@ -439,18 +439,21 @@ textarea::placeholder {
 /* Mode, sandbox and model read as one control group rather than three floating pills. */
 .controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: stretch;
-  height: 32px;
+  min-height: 32px;
   border: 1px solid var(--line-2);
   border-radius: var(--r);
   background: var(--ink-2);
   min-width: 0;
 }
+/* Chips keep their width and the group wraps, rather than cutting every value down to a letter or two. */
 .chip {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  min-height: 30px;
   padding: 0 2px 0 10px;
   font-size: 12px;
   color: var(--fg-3);

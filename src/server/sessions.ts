@@ -61,6 +61,8 @@ export interface WebState {
     effort: ReasoningEffort | null;
     /** How much models reason step by step: always, adaptive or never. */
     reasoning: 'always' | 'adaptive' | 'never';
+    /** Learning from tool calls is on. */
+    learning: boolean;
     running: boolean;
     swarm: { active: boolean; id?: string; names: string[] };
   };
@@ -146,7 +148,7 @@ export class WebSession {
     this.store.attachAgent(rt.agent, 'main');
     if (rt.browser) this.store.attachBrowser(rt.browser.events);
     this.store.subscribe(() => this.push());
-    for (const e of ['mode', 'sandbox', 'todos', 'model', 'effort', 'reasoning'] as const)
+    for (const e of ['mode', 'sandbox', 'todos', 'model', 'effort', 'reasoning', 'learning'] as const)
       rt.events.on(e, () => this.push(true));
     rt.events.on('sentry', (a) => {
       this.store.notice(
@@ -211,6 +213,7 @@ export class WebSession {
         sandboxDescription: rt.sandbox.describe(),
         effort: rt.config.reasoningEffort ?? null,
         reasoning: rt.config.reasoning.mode,
+        learning: rt.config.learning.enabled,
         running: rt.agent.isRunning || !!swarm?.roster().some((t) => t.running),
         swarm: { active: !!swarm, ...(swarm?.id ? { id: swarm.id } : {}), names: swarm?.names ?? [] },
       },
@@ -365,8 +368,13 @@ export class WebSession {
     model?: unknown;
     effort?: unknown;
     reasoning?: unknown;
+    learning?: unknown;
   }): Promise<void> {
     const rt = this.runtime;
+    if (body.learning !== undefined) {
+      if (typeof body.learning !== 'boolean') throw new HttpError(400, 'Invalid learning setting');
+      rt.setLearning(body.learning);
+    }
     if (body.reasoning !== undefined) {
       const t = String(body.reasoning);
       if (!['always', 'adaptive', 'never'].includes(t)) throw new HttpError(400, 'Invalid reasoning mode');

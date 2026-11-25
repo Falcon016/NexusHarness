@@ -61,6 +61,29 @@ function pick<T>(c: CmdCtx, title: string, items: Choice<T>[], initial?: number)
   );
 }
 
+/** /lessons save: have the model draft a skill from the last long task, show it, and save it if wanted. */
+async function saveLearnedSkill(c: CmdCtx): Promise<void> {
+  const { runtime, store } = c;
+  if (!runtime.config.learning.enabled)
+    return store.notice('Learning is off. Turn it on with /lessons on.', 'warn');
+  store.notice('Drafting the skill…');
+  let draft;
+  try {
+    draft = await runtime.draftSkill();
+  } catch (e) {
+    return store.notice(`Could not draft the skill: ${(e as Error).message}`, 'warn');
+  }
+  if ('error' in draft) return store.notice(draft.error, 'warn');
+  store.notice(`name: ${draft.name}\ndescription: ${draft.description}\n\n${draft.body}`);
+  const ok = await pick(c, `Save the skill "${draft.name}"?`, [
+    { label: 'Save it', value: true, hint: 'listed in the prompt from the next conversation' },
+    { label: 'Discard it', value: false },
+  ]);
+  if (!ok) return store.notice('Discarded.');
+  const path = runtime.saveSkill(draft);
+  store.notice(`Saved ${draft.name} (${path}). Edit or delete it any time; /lessons lists it.`, 'success');
+}
+
 const NEW_SERVER = '\0new';
 
 const keyHint = (k: LoginTarget['key']) => (k === 'saved' ? 'key saved' : k ? `key from ${k}` : '');
@@ -840,6 +863,109 @@ export const BUILTINS: BuiltinCommand[] = [
     },
   },
   {
+    name: 'lessons',
+    usage: 'lessons [on|off|save|clear]',
+    description:
+      'What has been learned from tool calls: lessons and saved skills (see, delete, switch on/off)',
+    async run(args, c) {
+      const { runtime, store } = c;
+      const a = args.trim().toLowerCase();
+      const learner = runtime.learner;
+      const on = runtime.config.learning.enabled;
+      if (a === 'on' || a === 'off') {
+        runtime.setLearning(a === 'on');
+        return store.notice(
+          a === 'on'
+            ? 'Learning on (saved). What has been learned goes into the prompt from the next request; new lessons join it from the next conversation.'
+            : 'Learning off (saved). What was learned is kept, and comes back if you turn it on again.',
+          'success',
+        );
+      }
+      if (a === 'clear') {
+        const ok = await pick(c, 'Delete every lesson for this project and this model family?', [
+          { label: 'Delete them', value: true },
+          { label: 'Keep them', value: false },
+        ]);
+        if (ok) {
+          learner.forgetAll();
+          store.notice('Lessons deleted. Saved skills are kept (delete those from /lessons).', 'success');
+        }
+        return;
+      }
+      if (a === 'save') return saveLearnedSkill(c);
+      if (a) return store.notice('Usage: /lessons [on|off|save|clear]', 'warn');
+
+      const lessons = learner.allLessons();
+      const skills = learner.skills();
+      const unused = new Set(learner.unusedSkills().map((s) => s.name));
+      const n = (x: number) => x.toLocaleString('en-US');
+      const lines = [
+        `Learning: ${on ? 'on' : 'off'} · budget ${n(runtime.config.learning.budget)} tokens · ` +
+          (on
+            ? `this conversation's prompt uses ${n(runtime.learnedTokens())} (what is learned now joins it in the next conversation)`
+            : 'nothing goes into the prompt'),
+        `Model family: ${learner.modelFamily}`,
+      ];
+      if (!lessons.length && !skills.length)
+        lines.push(
+          on
+            ? 'Nothing learned yet. Lessons come from tool calls that failed and were then fixed; skills are offered after long tasks.'
+            : 'Nothing learned yet. Turn it on with /lessons on.',
+        );
+      if (lessons.length) {
+        lines.push('', 'Lessons (helped · came back · handed over):');
+        for (const l of lessons)
+          lines.push(
+            `  ${l.file === 'model' ? 'model  ' : 'project'} ${l.helped}·${l.recurred}·${l.shown}  ${l.text}  (~${Math.ceil(l.text.length / 4)} tokens)`,
+          );
+      }
+      if (skills.length) {
+        lines.push('', 'Saved skills:');
+        for (const s of skills)
+          lines.push(
+            `  ${s.name}: ${s.description} · used ${s.uses}×${unused.has(s.name) ? ' · not used for 45+ days, consider deleting' : ''}`,
+          );
+      }
+      store.notice(lines.join('\n'));
+      const action = await pick(c, 'Lessons', [
+        { label: on ? 'Turn learning off' : 'Turn learning on', value: 'toggle' as const },
+        ...(lessons.length ? [{ label: 'Delete a lesson…', value: 'lesson' as const }] : []),
+        ...(skills.length ? [{ label: 'Delete a saved skill…', value: 'skill' as const }] : []),
+        ...(learner.offer ? [{ label: 'Save the last task as a skill', value: 'save' as const }] : []),
+        { label: 'Close', value: 'close' as const },
+      ]);
+      if (action === 'toggle') {
+        runtime.setLearning(!on);
+        return store.notice(
+          on
+            ? 'Learning off (saved). What was learned is kept.'
+            : 'Learning on (saved). What has been learned goes into the prompt from the next request.',
+          'success',
+        );
+      }
+      if (action === 'save') return saveLearnedSkill(c);
+      if (action === 'lesson') {
+        const id = await pick(
+          c,
+          'Delete which lesson?',
+          lessons.map((l) => ({ label: l.text.slice(0, 90), value: l.id, hint: l.file })),
+        );
+        if (id && learner.forget(id)) store.notice('Lesson deleted.', 'success');
+      }
+      if (action === 'skill') {
+        const name = await pick(
+          c,
+          'Delete which skill?',
+          skills.map((s) => ({ label: s.name, value: s.name, hint: s.description.slice(0, 60) })),
+        );
+        if (name && learner.forgetSkill(name)) {
+          runtime.reloadSkills();
+          store.notice(`Skill ${name} deleted.`, 'success');
+        }
+      }
+    },
+  },
+  {
     name: 'context',
     usage: 'context [size|auto]',
     description: 'Show or set the context window size (e.g. /context 128k)',
@@ -874,6 +1000,10 @@ export const BUILTINS: BuiltinCommand[] = [
         `${a ? 'Context window now' : 'Context window'}: ${n(m.contextWindow)} tokens (${from}) for ${runtime.modelSpec}.`,
         `In use: ${n(used)} (${Math.round((used / m.contextWindow) * 100)}%). Compaction starts at ${n(runtime.agent.limits().target)}.`,
       ];
+      if (runtime.config.learning.enabled)
+        lines.push(
+          `Learned lessons and skills: ${n(runtime.learnedTokens())} tokens of the prompt (budget ${n(runtime.config.learning.budget)}; /lessons).`,
+        );
       if (m.contextSource === 'config' && m.serverWindow && m.serverWindow !== m.contextWindow)
         lines.push(
           m.contextWindow > m.serverWindow

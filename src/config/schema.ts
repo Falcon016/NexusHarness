@@ -265,6 +265,21 @@ export const configSchema = z.object({
    * starts repeating itself is cut off and resumed, and repeating the same calls gets a reminder each time.
    */
   loopDetection: z.boolean().default(true),
+  /**
+   * Learning from tool calls (docs/learning.md): one-line lessons from calls that failed and were then fixed,
+   * and skills saved from long tasks that went well. Off until you turn it on (/lessons on).
+   */
+  learning: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** System-prompt tokens that learned lessons and learned skills may take together. */
+      budget: z.number().int().min(0).max(8000).default(600),
+      /** Lessons kept per project and per model family. */
+      maxLessons: z.number().int().min(1).max(200).default(30),
+      /** Offer to save a task as a skill when it took at least this many tool calls; 0: never offer. */
+      skillAfterCalls: z.number().int().min(0).default(8),
+    })
+    .default({ enabled: false, budget: 600, maxLessons: 30, skillAfterCalls: 8 }),
   // `nacre` is the theme's name from before the rename.
   theme: z.preprocess((v) => (v === 'nacre' ? 'nexus' : v), z.enum(['nexus', 'mono'])).default('nexus'),
   /** Show agents' reasoning in full in the terminal UI (toggle with ctrl+t or /thinking). */

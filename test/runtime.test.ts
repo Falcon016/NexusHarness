@@ -5,6 +5,7 @@ import { loadConfig } from '../src/config/load.js';
 import { AuthStore } from '../src/config/auth.js';
 import { contextFromArgs, OpenAICompatProvider } from '../src/llm/openai.js';
 import { ProviderRegistry } from '../src/llm/registry.js';
+import { LessonFile } from '../src/learn/lessons.js';
 import { projectKey } from '../src/paths.js';
 import { Runtime } from '../src/runtime.js';
 import { parseTokenCount } from '../src/util/text.js';
@@ -225,6 +226,41 @@ describe('runtime with the mock server', () => {
       expect(third.modelSaveNote).toContain('--model');
     } finally {
       await third.dispose();
+      ws.cleanup();
+    }
+  });
+
+  it('puts learned lessons and skills in the main prompt only when learning is on, within its budget', async () => {
+    const { ws, boot, work } = setup({ model: 'mock/qwen3.8-27b' });
+    const data = join(ws.dir, '.home', 'data');
+    new LessonFile(join(data, 'learning', 'projects', `${projectKey(work)}.json`)).add(
+      'Run tests with `npx vitest run`.',
+      { tool: 'bash', program: 'npm test', signature: 'exit 1' },
+      'project',
+    );
+    const skillDir = join(data, 'learning', 'skills', projectKey(work), 'release');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: release\ndescription: Build a release\n---\n1. make',
+    );
+    const rt = await boot();
+    try {
+      expect(rt.systemPrompt('main')).not.toContain('Lessons from earlier sessions');
+      expect(rt.skills.names()).not.toContain('release');
+      rt.setLearning(true);
+      const prompt = rt.systemPrompt('main');
+      expect(prompt).toContain('Run tests with `npx vitest run`.');
+      expect(prompt).toContain('- release: Build a release');
+      expect(rt.learnedTokens()).toBeGreaterThan(0);
+      expect(rt.learnedTokens()).toBeLessThanOrEqual(600);
+      expect(
+        JSON.parse(readFileSync(join(ws.dir, '.home', 'config', 'config.json'), 'utf8')).learning,
+      ).toEqual({
+        enabled: true,
+      });
+    } finally {
+      await rt.dispose();
       ws.cleanup();
     }
   });
