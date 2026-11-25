@@ -18,6 +18,7 @@ src/
   swarm/             message bus, wake rules, budget guard, persistence (store.ts), swarm_* tools
   server/            `nexus serve`: HTTP + SSE API, auth, session manager (web/ holds the dashboard)
   ext/               extensions, skills, prompt templates, MCP client
+  learn/             learning from tool calls: lessons from failed-then-fixed calls, skills saved from long tasks
   config/            zod schema, layered loading, trust model, auth store
   tui/               Ink UI: store (events → state), views, input, dialogs, slash commands, theme
   modes/             print/json and rpc

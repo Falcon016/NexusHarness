@@ -4,6 +4,13 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Learning from tool calls (`/lessons`, `learning`; [docs/learning.md](docs/learning.md)).** On by default (`/lessons off`).
+  - A tool call that failed and was then fixed becomes a one-line lesson, kept per project or per model family.
+  - Lessons come back with the same failure, or up front within a token budget fixed for each conversation, so the
+    server's cache stays valid.
+  - The harness counts whether each lesson helps and drops the ones that don't.
+  - Long tasks that ended well can be saved as skills, after you approve the draft.
+  - `/lessons` lists everything learned and deletes it; the dashboard has a Learning selector.
 - **The model you pick is remembered.** `/model` (and the dashboard and Telegram) saves the choice, so new sessions
   and the restart after an update start with it instead of the model setup first saved. A `smallModel` that was the
   same model follows it. If `--model`, `NEXUS_MODEL` or a project config would still override it, you're told.

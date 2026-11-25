@@ -1,3 +1,4 @@
+import type { Learner } from '../src/learn/learner.js';
 import { existsSync } from 'node:fs';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -120,6 +121,7 @@ export function makeAgent(
     window?: number;
     session?: Session;
     config?: Record<string, unknown>;
+    learner?: Learner;
   } = {},
 ) {
   const config = testConfig(opts.config ?? {});
@@ -137,6 +139,7 @@ export function makeAgent(
     approver: opts.approver ?? (async () => ({ allow: true })),
     system: () => 'test system prompt',
     retryDelaysMs: [0, 0],
+    ...(opts.learner ? { learner: opts.learner } : {}),
   });
   const events: AgentEvent[] = [];
   agent.events.on('event', (e) => events.push(e));

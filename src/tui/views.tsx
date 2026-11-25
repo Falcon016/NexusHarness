@@ -719,6 +719,7 @@ export function Footer({
   effort,
   reasoning,
   sentry,
+  learning,
 }: {
   mode: ApprovalMode;
   sandbox: string;
@@ -732,6 +733,8 @@ export function Footer({
   reasoning?: string | undefined;
   /** Sentry mode is on: how many findings are open. */
   sentry?: number | undefined;
+  /** Learning from tool calls is on. */
+  learning?: boolean | undefined;
 }) {
   const t = useTheme();
   const { columns } = useDrawSize();
@@ -759,6 +762,7 @@ export function Footer({
     ...(reasoning && reasoning !== 'always'
       ? [part(`reasoning ${reasoning}`, 5, <Text color={t.sky}>reasoning {reasoning}</Text>)]
       : []),
+    ...(learning ? [part('learning', 4, <Text color={t.sky}>learning</Text>)] : []),
     ...(swarmCount ? [part(`swarm ×${swarmCount}`, 3, <Text color={t.rose}>swarm ×{swarmCount}</Text>)] : []),
     ...(sentry !== undefined
       ? [

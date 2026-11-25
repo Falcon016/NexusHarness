@@ -14,6 +14,10 @@ import { BUILTIN_PROVIDERS, loadConfig, trustProject, type LoadedConfig } from '
 import type { ApprovalMode, Config, PartialConfig, SandboxMode, SwarmAgentConfig } from './config/schema.js';
 import { loadExtensions, loadPromptTemplates, type SlashCommand } from './ext/extensions.js';
 import { BUILTIN_SKILLS_DIR, SkillStore } from './ext/skills.js';
+import { Learner } from './learn/learner.js';
+
+/** The model's name without its provider: "llamacpp/qwen3.8-27b" → "qwen3.8-27b". */
+const modelNameOf = (spec: string | undefined) => (spec ?? '').replace(/^[^/]+\//, '');
 import { connectAll, type McpConnection } from './ext/mcp.js';
 import { NO_MODEL, ProviderRegistry, type ResolvedModel } from './llm/registry.js';
 import { projectKey } from './paths.js';
@@ -155,6 +159,7 @@ export type RuntimeEvents = {
   effort: ReasoningEffort | undefined;
   /** The reasoning mode changed (/reasoning). */
   reasoning: Config['reasoning']['mode'];
+  learning: boolean;
   /** Sentry mode found something, put up a shield, or reported (also sent when it turns on or off). */
   sentry: Alert;
 };
@@ -239,6 +244,8 @@ export class Runtime {
       warnings.push(...mesh.warnings);
     }
 
+    // Learning from tool calls (off unless turned on): lessons, and skills saved from long tasks.
+    const learner = new Learner(config.learning, paths.data, projectKey(opts.cwd), modelNameOf(config.model));
     // Skills, prompt templates and extensions: user-level always; project-level only when trusted.
     const skills = new SkillStore();
     const trusted = loaded.projectTrusted;
@@ -249,6 +256,7 @@ export class Runtime {
       ...skills.load([
         { dir: BUILTIN_SKILLS_DIR, source: 'built-in' },
         { dir: join(paths.config, 'skills'), source: 'user' },
+        ...(config.learning.enabled ? [{ dir: learner.skillsDir, source: 'learned' }] : []),
         ...(trusted ? [{ dir: join(projectRoot, 'skills'), source: 'project' }] : []),
       ]),
     );
@@ -298,6 +306,7 @@ export class Runtime {
       approver: (req, sig) => rt.broker.approver(req, sig),
       system: () => rt.systemPrompt('main'),
       hooks: ext.hooks,
+      learner,
     });
     rt = new Runtime(
       opts.cwd,
@@ -315,6 +324,8 @@ export class Runtime {
       systemOverride,
     );
     rt.warnings = warnings;
+    rt.learner = learner;
+    rt.skillDirs = { trusted, projectRoot };
     if (mesh) rt.startMesh(mesh);
     rt.commands = [
       ...loadPromptTemplates([
@@ -399,7 +410,7 @@ export class Runtime {
         mode: this.policy.mode,
         sandboxDescription: this.sandbox.describe(),
         toolNames: tools.all().map((t) => t.name),
-        skills: this.skills.list().map((s) => ({ name: s.name, description: s.description })),
+        skills: this.promptSkills(),
       },
       this.systemOverride,
     );
@@ -437,6 +448,79 @@ export class Runtime {
     };
   }
 
+  /** Learning from tool calls (docs/learning.md). */
+  learner!: Learner;
+  private skillDirs!: { trusted: boolean; projectRoot: string };
+
+  /**
+   * The skills listed in a prompt: all of them, except learned skills that did not fit this session's learning
+   * budget (they can still be loaded by name).
+   */
+  private promptSkills(): { name: string; description: string }[] {
+    const frozen = this.learner.enabled ? this.learner.freeze(this.agent.session.id) : undefined;
+    return this.skills
+      .list()
+      .filter((s) => s.source !== 'learned' || (frozen && this.learner.listsSkill(s.name)))
+      .map((s) => ({ name: s.name, description: s.description }));
+  }
+
+  /** The learned part of the main prompt: fixed for the session, so the server's cache stays valid. */
+  private learnedBlock(): string {
+    if (!this.learner.enabled) return '';
+    const { block } = this.learner.freeze(this.agent.session.id);
+    return block ? `\n\n${block}` : '';
+  }
+
+  /** Tokens the learned lessons and skills take in this session's prompt. */
+  learnedTokens(): number {
+    if (!this.learner.enabled) return 0;
+    const listed = this.skills
+      .list()
+      .filter((s) => s.source === 'learned' && this.learner.listsSkill(s.name))
+      .map((s) => `- ${s.name}: ${s.description}`);
+    return this.learner.promptTokens(listed);
+  }
+
+  /** Reload skills from disk (after a learned skill is saved or deleted, or learning is switched). */
+  reloadSkills(): void {
+    const { trusted, projectRoot } = this.skillDirs;
+    this.skills.load([
+      { dir: BUILTIN_SKILLS_DIR, source: 'built-in' },
+      { dir: join(this.loaded.paths.config, 'skills'), source: 'user' },
+      ...(this.config.learning.enabled ? [{ dir: this.learner.skillsDir, source: 'learned' }] : []),
+      ...(trusted ? [{ dir: join(projectRoot, 'skills'), source: 'project' }] : []),
+    ]);
+  }
+
+  /** Turn learning on or off (saved). */
+  setLearning(enabled: boolean): void {
+    this.config.learning = { ...this.config.learning, enabled };
+    this.learner.setConfig(this.config.learning);
+    editUserConfig((c) => {
+      const l = (c as { learning?: Record<string, unknown> }).learning ?? {};
+      return { ...c, learning: { ...l, enabled } };
+    }, this.loaded.paths);
+    this.reloadSkills();
+    this.events.emit('learning', enabled);
+  }
+
+  /** Ask the model to draft a skill from the last long task (reasoning off, not saved to the conversation). */
+  async draftSkill(
+    signal?: AbortSignal,
+  ): Promise<{ name: string; description: string; body: string } | { error: string }> {
+    const prompt = this.learner.skillPrompt();
+    if (!prompt)
+      return { error: 'There is no task to save yet: it is offered after a long task that ended well.' };
+    if (this.agent.isRunning) return { error: 'Wait for the current turn to finish first.' };
+    return this.learner.checkDraft(await this.agent.aside(prompt, 1500, signal));
+  }
+
+  saveSkill(d: { name: string; description: string; body: string }): string {
+    const path = this.learner.saveSkill(d);
+    this.reloadSkills();
+    return path;
+  }
+
   systemPrompt(agentId: string): string {
     const swarmInfo = agentId !== 'main' && this.swarm ? this.swarmPromptFor(agentId) : undefined;
     const registry = agentId === 'main' ? this.tools : this.swarmToolsFor(agentId);
@@ -448,13 +532,14 @@ export class Runtime {
           mode: this.policy.mode,
           sandboxDescription: this.sandbox.describe(),
           toolNames: registry.all().map((t) => t.name),
-          skills: this.skills.list().map((s) => ({ name: s.name, description: s.description })),
+          skills: this.promptSkills(),
           ...(swarmInfo ? { swarm: swarmInfo } : {}),
         },
         this.systemOverride,
       ) +
       (this.mesh && registry.get('task') ? MESH_PROMPT : '') +
-      (this.sentry?.on && registry.get('sentry_shield') ? SENTRY_PROMPT : '')
+      (this.sentry?.on && registry.get('sentry_shield') ? SENTRY_PROMPT : '') +
+      (agentId === 'main' ? this.learnedBlock() : '')
     );
   }
 
@@ -789,6 +874,7 @@ export class Runtime {
     const m = await this.registry.resolveDetected(spec);
     const before = this.modelSpec;
     this.agent.setModel(m);
+    this.learner?.setModel(m.model);
     if (opts.save) {
       editUserConfig((c) => {
         const out: PartialConfig = { ...c, model: spec };

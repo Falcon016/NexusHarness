@@ -119,6 +119,7 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
     runtime.events.on('sandbox', setSandbox);
     runtime.events.on('effort', setEffort);
     runtime.events.on('reasoning', () => force((n) => n + 1));
+    runtime.events.on('learning', () => force((n) => n + 1));
     runtime.events.on('todos', setTodos);
     runtime.events.on('model', () => force((n) => n + 1));
     runtime.events.on('sentry', (a) => {
@@ -389,6 +390,7 @@ export function App({ runtime, store, theme, initialPrompt }: Props) {
             mode={mode}
             effort={effort}
             reasoning={runtime.config.reasoning.mode}
+            learning={runtime.config.learning.enabled}
             sandbox={sandbox}
             snap={snap}
             contextWindow={runtime.agent.model.contextWindow}

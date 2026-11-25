@@ -51,6 +51,7 @@ import {
   type StepBudget,
   type ThinkingStats,
 } from './thinking.js';
+import type { Learner } from '../learn/learner.js';
 import { ActionWatch, actionLoopNote, watchRepeats, WritingLoop, writingLoopNote } from './loops.js';
 import type { SkillAccess } from '../tools/types.js';
 
@@ -148,6 +149,8 @@ export interface AgentOptions {
   system: () => string;
   services?: AgentServices;
   hooks?: AgentHooks;
+  /** Learning from tool calls (main agent only; docs/learning.md). */
+  learner?: Learner;
   /** Delays between compaction retries (tests shorten these). */
   retryDelaysMs?: number[];
 }
@@ -187,6 +190,9 @@ export function outputLimitFix(message: string): { maxOutput: number } | { room:
 }
 
 /** Marks the harness's reminder to update the task list (a user message the user did not type). */
+/** Tool calls the model itself got wrong (as opposed to ones that were denied or interrupted). */
+const MALFORMED = /^(Invalid input for |Tool call arguments were not valid JSON|Unknown tool )/;
+
 export const TODO_CHECK = '[Task list check]';
 
 const formatTodos = (todos: TodoItem[]) =>
@@ -442,6 +448,66 @@ export class Agent {
     }
   }
 
+  /**
+   * The turn is over: if it fixed failed tool calls, ask the model for a one-line lesson about each (reasoning
+   * off, not saved to the conversation), and note whether the turn is worth offering to save as a skill.
+   */
+  private async learnFromTurn(
+    input: string | ContentBlock[],
+    stop: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const learner = this.o.learner!;
+    const prompt = learner.reflection();
+    if (prompt) {
+      this.emit({ type: 'status', text: 'Noting what fixed the failed tool calls…' });
+      try {
+        const lessons = learner.learn(await this.aside(prompt, 400, signal));
+        if (lessons.length)
+          this.emit({
+            type: 'status',
+            text: `Learned ${lessons.length === 1 ? 'a lesson' : `${lessons.length} lessons`} (see /lessons): ${lessons.join(' · ')}`,
+          });
+      } catch {
+        /* learning is best effort: a failed or cancelled request just learns nothing */
+      }
+    }
+    const task =
+      typeof input === 'string' ? input : input.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
+    learner.endTurn(task.trim(), stop === 'end_turn');
+    if (learner.offer)
+      this.emit({
+        type: 'status',
+        text: learner.offer.update
+          ? `The skill "${learner.offer.update}" needed fixing along the way. Run /lessons save to update it with what worked.`
+          : `That took ${learner.offer.calls} tool calls. Run /lessons save to keep how it was done as a skill for next time.`,
+      });
+  }
+
+  /**
+   * A one-off request about the conversation, answered without reasoning and not saved to it. It sends the same
+   * system prompt, tools and messages as the conversation with one more message at the end, so a llama.cpp
+   * server reuses its cache of the conversation instead of processing it again, and keeps that cache afterwards.
+   */
+  async aside(prompt: string, maxTokens: number, signal?: AbortSignal): Promise<string> {
+    const m = this.o.model;
+    const sig = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(120_000)]);
+    await m.provider.thinkingInfo?.(m.model, sig).catch(() => undefined);
+    const r = await assemble(
+      m.provider.stream({
+        model: m.model,
+        system: this.o.system(),
+        messages: [...this.view(), { role: 'user', content: [{ type: 'text', text: prompt }] }],
+        tools: this.o.tools.specs(),
+        maxTokens,
+        thinking: false,
+        signal: sig,
+      }),
+      {},
+    );
+    return r.message.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
+  }
+
   /** Close any tool call left unanswered by a crash or abort so the next request is valid. */
   private repairSession(): void {
     const ids = danglingToolUseIds(this.o.session.messages());
@@ -482,6 +548,7 @@ export class Agent {
         this.o.session.append({ role: 'user', content: [{ type: 'text', text: next }] }, this.id);
         this.keyStep = 'new message';
       }
+      if (!signal.aborted && this.o.learner) await this.learnFromTurn(input, stop, signal);
     } catch (e) {
       if (signal.aborted) stop = 'aborted';
       else if (e instanceof PauseTurn) {
@@ -1182,7 +1249,11 @@ export class Agent {
     const results = new Map<string, ToolResult>();
     const exec = async (p: Prepared) => {
       if (p.early) {
-        results.set(p.call.id, p.early);
+        // A call the model got wrong (not one that was denied or interrupted) is something to learn from.
+        const note = MALFORMED.test(p.early.content)
+          ? (this.o.learner?.observe(p.call.name, p.call.input, p.early) ?? '')
+          : '';
+        results.set(p.call.id, note ? { ...p.early, content: p.early.content + note } : p.early);
         return;
       }
       let result = await this.o.tools.run(p.call.name, p.input, this.toolContext(signal, p.call.id));
@@ -1222,6 +1293,8 @@ export class Agent {
               : `. Reminded it again (${loop.strike}).`),
         });
       }
+      const lesson = this.o.learner?.observe(p.call.name, p.input, result);
+      if (lesson) result = { ...result, content: result.content + lesson };
       results.set(p.call.id, result);
       this.emit({ type: 'tool_end', id: p.call.id, name: p.call.name, result });
     };
@@ -1237,7 +1310,13 @@ export class Agent {
         await exec(p);
         i++;
       }
-      if (p.early) this.emit({ type: 'tool_end', id: p.call.id, name: p.call.name, result: p.early });
+      if (p.early)
+        this.emit({
+          type: 'tool_end',
+          id: p.call.id,
+          name: p.call.name,
+          result: results.get(p.call.id) ?? p.early,
+        });
     }
 
     // Many parallel calls must not add up to more than a slice of the window either.
