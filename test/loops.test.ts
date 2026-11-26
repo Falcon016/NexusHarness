@@ -226,6 +226,83 @@ describe('repeated actions', () => {
     expect(session.messages().at(-1)!.content[0]).toMatchObject({ text: 'The scene is built.' });
   });
 
+  it('sees through results that only differ by where a screenshot was saved, or by clock times', () => {
+    const w = new ActionWatch();
+    const img = [{ data: 'c2FtZSBwaWN0dXJl' }];
+    const shot = (n: number) => ({
+      content: `Screenshot captured (1280×730). Saved to /tmp/nexusharness/screenshots/screenshot-20261126-0812${n}-00${n}.jpg`,
+      images: img,
+    });
+    expect(w.observe('browser_screenshot', {}, shot(1))).toBeUndefined();
+    expect(w.observe('browser_screenshot', {}, shot(2))).toBeUndefined();
+    expect(w.observe('browser_screenshot', {}, shot(3))).toMatchObject({ kind: 'cycle', strike: 1 });
+    const v = new ActionWatch();
+    for (const t of ['12:00:01', '12:00:02'])
+      v.observe('bash', { command: 'date; ls' }, { content: `${t}\na b (took 1.2s)` });
+    expect(
+      v.observe('bash', { command: 'date; ls' }, { content: '12:00:03\na b (took 0.9s)' }),
+    ).toBeDefined();
+  });
+
+  it('counts a new picture as progress, but not the same call made over and over', () => {
+    const w = new ActionWatch();
+    const frame = (i: number) => ({
+      content: 'Screenshot captured (1280×730).',
+      images: [{ data: `frame${i}` }],
+    });
+    for (let i = 1; i < 8; i++) expect(w.observe('browser_screenshot', {}, frame(i))).toBeUndefined();
+    expect(w.observe('browser_screenshot', {}, frame(8))).toMatchObject({
+      kind: 'same',
+      count: 8,
+      strike: 1,
+    });
+  });
+
+  it('stops running a looping call after three reminders, but never one that follows other work', () => {
+    const w = new ActionWatch();
+    const same = { content: 'Screenshot captured.', images: [{ data: 'x' }] };
+    for (let i = 0; i < 5; i++) {
+      expect(w.refuse('browser_screenshot', {})).toBeUndefined();
+      w.observe('browser_screenshot', {}, same);
+    }
+    // Told three times: the next identical screenshot, straight after the last, is not run.
+    expect(w.refuse('browser_screenshot', {})).toMatchObject({ strike: 4 });
+    expect(w.refuse('browser_screenshot', {})).toMatchObject({ strike: 5 });
+    // Something else in between (an edit) could change the picture: that screenshot runs.
+    w.observe('edit', { path: 'scene.js', new_string: 'v2' }, { content: 'Edited' });
+    expect(w.refuse('browser_screenshot', {})).toBeUndefined();
+    // And once the model has moved on for a while, the loop is forgotten.
+    for (let i = 0; i < 8; i++) w.observe('read', { path: `f${i}` }, { content: `file ${i}` });
+    w.observe('browser_screenshot', {}, same);
+    expect(w.refuse('browser_screenshot', {})).toBeUndefined();
+  });
+
+  it('answers a looping call with the note instead of running it, and the turn carries on', async () => {
+    writeFileSync(join(ws.dir, 'scene.txt'), 'the same scene\n');
+    const p = new AutoProvider([
+      ...Array.from({ length: 9 }, (_, i) => callTool(`s${i}`, 'read', { path: 'scene.txt' })),
+      say('Done looking.'),
+    ]);
+    const { agent, events, session } = makeAgent(ws.dir, p);
+    await agent.run('look at the scene');
+    const results = session
+      .messages()
+      .flatMap((m) => m.content)
+      .filter((b) => b.type === 'tool_result');
+    expect(results).toHaveLength(9);
+    const ran = results.filter((b) => b.type === 'tool_result' && b.content.includes('the same scene'));
+    const refused = results.filter(
+      (b) => b.type === 'tool_result' && b.content.startsWith(`${LOOP_NOTE} Not run`),
+    );
+    expect(ran).toHaveLength(5);
+    expect(refused).toHaveLength(4);
+    expect(refused.every((b) => b.type === 'tool_result' && b.isError)).toBe(true);
+    expect(notes(events).filter((t) => t.includes('not run again'))).toHaveLength(4);
+    // Each refusal makes the next request discourage repetition.
+    expect(p.requests.at(-1)!.antiRepeat).toBe(3);
+    expect(session.messages().at(-1)!.content[0]).toMatchObject({ text: 'Done looking.' });
+  });
+
   it('can be turned off', async () => {
     const p = new AutoProvider([
       ...Array.from({ length: 4 }, (_, i) => callTool(`r${i}`, 'ls', {})),
