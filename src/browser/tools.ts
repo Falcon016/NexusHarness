@@ -123,14 +123,15 @@ export const browserTools: AnyTool[] = [
   defineTool({
     name: 'browser_screenshot',
     description:
-      'Take a screenshot of the current page (use when visual layout matters; otherwise prefer browser_snapshot).',
+      'Take a screenshot of the current page (use when visual layout matters; otherwise prefer browser_snapshot, ' +
+      'which is faster and cheaper). full_page captures at most the top 4000px of a long page.',
     risk: 'read',
     schema: z.object({ full_page: z.boolean().optional() }),
     describe: () => 'screenshot',
     async execute(i, ctx) {
       try {
-        const img = await svc(ctx).screenshot(i.full_page ?? false);
-        return { content: 'Screenshot captured.', images: [img] };
+        const shot = await svc(ctx).screenshot(i.full_page ?? false);
+        return { content: `Screenshot captured (${shot.note}).`, images: [shot.image] };
       } catch (e) {
         return { content: `Browser error: ${(e as Error).message}`, isError: true };
       }

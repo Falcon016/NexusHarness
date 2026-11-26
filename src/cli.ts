@@ -368,8 +368,11 @@ async function main(): Promise<number> {
     }),
     {
       exitOnCtrlC: false,
-      // The store publishes at most 20 times a second; drawing more often only costs CPU.
+      // The store publishes at most 20 times a second (fewer when drawing is slow); drawing more often only costs CPU.
       maxFps: 20,
+      // Only the lines that changed are rewritten: a few times fewer bytes for the terminal to process each frame.
+      incrementalRendering: true,
+      onRender: ({ renderTime }) => store.frameDrawn(renderTime),
       // We only get here on a real terminal (checked above). Without this, Ink treats a stray CI=true in the
       // environment (dev containers, some IDE shells) as "not interactive" and never draws the live UI.
       interactive: true,

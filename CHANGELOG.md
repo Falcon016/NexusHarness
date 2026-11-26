@@ -4,6 +4,16 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Keeps up with fast models on slower machines.**
+  - All the UI's animations now run off one clock, instead of three that kept missing each other.
+  - The gap between updates grows when drawing a frame is slow, so drawing takes about a quarter of the time at most.
+  - Only changed lines are rewritten.
+  - Measured on a long code block at 90 tokens/s in a 220×60 window: half the CPU, and 70% fewer bytes for the terminal to process.
+- **Screenshots a vision model can handle.**
+  - `browser_screenshot` captures CSS pixels at most 1280 wide, not the screen's device pixels. On a HiDPI screen that was 3200×1826.
+  - A full page is cut at 4000px; it was a 3170×27732 image for a long page.
+  - The tool says the image size and what was cut.
+  - Chrome keeps drawing when its window is covered or minimized, and a screenshot that times out or finds no frame to capture is retried once, with the tab brought to the front.
 - **Learning from tool calls (`/lessons`, `learning`; [docs/learning.md](docs/learning.md)).** On by default (`/lessons off`).
   - A tool call that failed and was then fixed becomes a one-line lesson, kept per project or per model family.
   - Lessons come back with the same failure, or up front within a token budget fixed for each conversation, so the

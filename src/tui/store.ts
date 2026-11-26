@@ -67,6 +67,12 @@ export interface LiveAgent {
  * reading: the request is sent and nothing has come back (a local server reads the whole prompt first);
  * thinking, writing (the reply), drafting (a tool call's arguments), tools (running them).
  */
+/** How often animations move. */
+export const ANIMATION_MS = 100;
+
+/** The frame of an animation that moves every `ms`, by the clock: no timer, the store's heartbeat redraws. */
+export const animationFrame = (ms = ANIMATION_MS) => Math.floor(Date.now() / ms);
+
 export type ActivityKind = 'reading' | 'thinking' | 'writing' | 'drafting' | 'tools';
 
 /** A compaction in progress: how full the context was, and the summary being written. */
@@ -208,6 +214,8 @@ export class UiStore {
   private settle = new Map<string, { pos: number; inFence: boolean; cut: number }>();
   private liveSpeed = new Map<string, number>();
   private lastSpeed: number | undefined;
+  /** How long drawing a frame takes, on average (ms): updates are spaced so drawing never takes over the CPU. */
+  private frameMs = 0;
 
   /**
    * `printAsStreamed`: print each finished line of a reply as it arrives, so only the unfinished part stays in
@@ -249,7 +257,21 @@ export class UiStore {
   private publish(immediate = false): void {
     this.dirty = true;
     if (immediate) return this.flush();
-    this.timer ??= setTimeout(() => this.flush(), 50);
+    this.timer ??= setTimeout(() => this.flush(), this.frameInterval());
+  }
+
+  /**
+   * Time between updates while text streams in: 50 ms (20 a second) when drawing is quick, longer when it is not
+   * (a slow CPU, a big window, a long code block on screen), so drawing takes at most about a quarter of the
+   * time. Otherwise a fast model on a slow machine gets the UI drawing frame after frame and falling behind.
+   */
+  frameInterval(): number {
+    return Math.min(250, Math.max(50, Math.round(this.frameMs * 4)));
+  }
+
+  /** How long the terminal UI took to draw the last frame (ms). */
+  frameDrawn(ms: number): void {
+    this.frameMs = this.frameMs ? this.frameMs * 0.8 + ms * 0.2 : ms;
   }
 
   private flush(): void {
@@ -259,6 +281,30 @@ export class UiStore {
     this.dirty = false;
     this.snapshot = this.build();
     for (const l of this.listeners) l();
+    this.beat();
+  }
+
+  /**
+   * The one clock for animations (spinners, the shimmer): while something is busy, a fresh snapshot at least
+   * every 100 ms, or every frame interval if drawing is slow, and none while text is streaming in anyway. The
+   * animations read the time when drawn, so they need no timers of their own, and the UI is drawn on one
+   * schedule instead of three that keep missing each other.
+   */
+  private heartbeat: ReturnType<typeof setTimeout> | undefined;
+  private beat(): void {
+    if (this.heartbeat) clearTimeout(this.heartbeat);
+    this.heartbeat = undefined;
+    const busy = !!this.compacting || !!this.status || [...this.live.values()].some((a) => a.running);
+    if (!busy) return;
+    this.heartbeat = setTimeout(
+      () => {
+        this.heartbeat = undefined;
+        this.dirty = true;
+        this.flush();
+      },
+      Math.max(ANIMATION_MS, this.frameInterval()),
+    );
+    this.heartbeat.unref?.();
   }
 
   // ---- commit helpers -----------------------------------------------------------------------------
@@ -408,6 +454,7 @@ export class UiStore {
   dispose(): void {
     for (const u of this.unsubs.splice(0)) u();
     if (this.timer) clearTimeout(this.timer);
+    if (this.heartbeat) clearTimeout(this.heartbeat);
   }
 
   private onAgentEvent(name: string, e: AgentEvent, inSwarm = false): void {

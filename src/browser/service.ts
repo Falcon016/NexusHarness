@@ -9,6 +9,21 @@ import { redact } from '../util/redact.js';
 import { truncateMiddle } from '../util/text.js';
 import { wrapUntrusted } from '../util/untrusted.js';
 
+/** Screenshots for the model: at most this wide (CSS pixels), and a full page at most this tall. */
+const SHOT_WIDTH = 1280;
+const SHOT_FULL_HEIGHT = 4000;
+const SHOT_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 export type BrowserEvent =
   | { type: 'opened' }
   | { type: 'closed' }
@@ -126,7 +141,15 @@ export class BrowserService {
         viewport: null,
         acceptDownloads: false,
         permissions: [],
-        args: ['--no-first-run', '--no-default-browser-check'],
+        args: [
+          '--no-first-run',
+          '--no-default-browser-check',
+          // Keep drawing while the window is covered, minimized or in the background: otherwise Chrome stops
+          // producing frames and a screenshot waits for one until it times out.
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-background-timer-throttling',
+        ],
       });
     } catch (e) {
       throw new BrowserError(
@@ -249,17 +272,93 @@ export class BrowserService {
     const page = this.activePage;
     if (!this.context || !page || page.isClosed()) return undefined;
     try {
-      const buf = await page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 });
+      // CSS pixels: on a HiDPI screen, device pixels are four times the data for the same picture.
+      const buf = await page.screenshot({ type: 'jpeg', quality: 55, scale: 'css', timeout: 4000 });
       return { mediaType: 'image/jpeg', data: buf.toString('base64') };
     } catch {
       return undefined;
     }
   }
 
-  async screenshot(fullPage = false): Promise<ImageData> {
+  /**
+   * A screenshot sized for a vision model: CSS pixels (not the screen's device pixels), at most SHOT_WIDTH wide,
+   * and a full page cut at SHOT_FULL_HEIGHT. An image's cost to a local vision model grows with its pixels: a
+   * full-window screenshot on a HiDPI screen is several thousand image tokens, and a long page tens of thousands,
+   * each one slow to process and some past what the server accepts.
+   */
+  async screenshot(fullPage = false): Promise<{ image: ImageData; note: string }> {
     const page = await this.ensure();
-    const buf = await page.screenshot({ type: 'jpeg', quality: 70, fullPage });
-    return { mediaType: 'image/jpeg', data: buf.toString('base64') };
+    try {
+      return await this.capture(page, fullPage);
+    } catch (e) {
+      // A window that is minimized or behind others may produce no frames to capture, and Chrome sometimes has
+      // none ready just after a page loads ("Unable to capture screenshot"): bring the tab to the front, give
+      // it a moment, and try once more.
+      if (!/timeout|timed out|unable to capture/i.test((e as Error).message)) throw e;
+      await page.bringToFront().catch(() => {});
+      await page.waitForTimeout(300).catch(() => {});
+      try {
+        return await this.capture(page, fullPage);
+      } catch (again) {
+        throw new BrowserError(
+          `The screenshot failed (${(again as Error).message.split('\n')[0]}). The browser window may be ` +
+            'minimized; use browser_snapshot to read the page instead.',
+        );
+      }
+    }
+  }
+
+  private async capture(page: Page, fullPage: boolean): Promise<{ image: ImageData; note: string }> {
+    // A string, so it runs in the page without the DOM's types in this build.
+    const m = (await page.evaluate(`({
+      w: window.innerWidth,
+      h: window.innerHeight,
+      x: window.scrollX,
+      y: window.scrollY,
+      docH: Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0),
+      dpr: window.devicePixelRatio || 1,
+    })`)) as { w: number; h: number; x: number; y: number; docH: number; dpr: number };
+    const height = fullPage ? Math.min(m.docH, SHOT_FULL_HEIGHT) : m.h;
+    const scale = Math.min(1, SHOT_WIDTH / Math.max(1, m.w));
+    // Chrome multiplies the clip's scale by the screen's pixel ratio (2 on a HiDPI screen): divide it out.
+    const clip = { x: fullPage ? 0 : m.x, y: fullPage ? 0 : m.y, width: m.w, height, scale: scale / m.dpr };
+    let data: string;
+    try {
+      // Chrome draws the picture at the size asked for, so nothing has to be resized afterwards.
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const r = await withTimeout(
+          cdp.send('Page.captureScreenshot', {
+            format: 'jpeg',
+            quality: 70,
+            clip,
+            captureBeyondViewport: fullPage,
+          }),
+          SHOT_TIMEOUT_MS,
+          'Screenshot',
+        );
+        data = r.data;
+      } finally {
+        await cdp.detach().catch(() => {});
+      }
+    } catch (e) {
+      if (/timeout|timed out/i.test((e as Error).message)) throw e;
+      // Not Chromium's protocol (or it refused): Playwright's own, in CSS pixels, without the scaling.
+      const buf = await page.screenshot({
+        type: 'jpeg',
+        quality: 70,
+        scale: 'css',
+        timeout: SHOT_TIMEOUT_MS,
+        ...(fullPage ? { fullPage: true, clip: { x: 0, y: 0, width: m.w, height } } : {}),
+      });
+      data = buf.toString('base64');
+    }
+    const w = Math.round(m.w * scale);
+    const h = Math.round(height * scale);
+    const notes = [`${w}×${h}`];
+    if (scale < 1) notes.push(`scaled to ${Math.round(scale * 100)}% of the ${m.w}px-wide window`);
+    if (fullPage && m.docH > height) notes.push(`the top ${height}px of a ${m.docH}px page`);
+    return { image: { mediaType: 'image/jpeg', data }, note: notes.join(', ') };
   }
 
   async tabs(action: 'list' | 'new' | 'select' | 'close', index?: number, url?: string): Promise<string> {
