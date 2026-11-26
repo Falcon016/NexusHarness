@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineTool, type AnyTool, type ToolContext, type ToolResult } from '../tools/types.js';
 import { looksLocal } from './files.js';
+import { SCREENSHOT_DIR, saveScreenshot } from './screenshots.js';
 import { BrowserError, type BrowserService } from './service.js';
 
 function svc(ctx: ToolContext): BrowserService {
@@ -139,14 +140,23 @@ export const browserTools: AnyTool[] = [
     name: 'browser_screenshot',
     description:
       'Take a screenshot of the current page (use when visual layout matters; otherwise prefer browser_snapshot, ' +
-      'which is faster and cheaper). full_page captures at most the top 4000px of a long page.',
+      'which is faster and cheaper). full_page captures at most the top 4000px of a long page. You see the ' +
+      `image in the result, and it is also saved as a file in ${SCREENSHOT_DIR} (the result gives the path).`,
     risk: 'read',
     schema: z.object({ full_page: z.boolean().optional() }),
     describe: () => 'screenshot',
     async execute(i, ctx) {
       try {
         const shot = await svc(ctx).screenshot(i.full_page ?? false);
-        return { content: `Screenshot captured (${shot.note}).`, images: [shot.image] };
+        // The model sees the picture in this result; the file is for when it needs one (to compare, or to
+        // show the user), always in the same folder.
+        let saved = '';
+        try {
+          saved = ` Saved to ${saveScreenshot(shot.image)}`;
+        } catch (e) {
+          saved = ` (Not saved to a file: ${(e as Error).message})`;
+        }
+        return { content: `Screenshot captured (${shot.note}).${saved}`, images: [shot.image] };
       } catch (e) {
         return { content: `Browser error: ${(e as Error).message}`, isError: true };
       }

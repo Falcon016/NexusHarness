@@ -22,15 +22,21 @@ interface WalkOptions {
   root: string;
   signal: AbortSignal;
   includeSkipped?: boolean;
+  /** Walk into hidden folders (.config, .cache, .mozilla …) too. */
+  hidden?: boolean;
   limit?: number;
   check: (path: string) => boolean;
 }
 
-/** Depth-first file walk with a hard cap, skipping dependency/build directories. */
+/**
+ * Depth-first file walk with a hard cap, skipping dependency/build directories and, unless asked, hidden ones:
+ * run from a home folder, a search would otherwise spend its time in browser profiles, caches and app data.
+ */
 async function* walk({
   root,
   signal,
   includeSkipped,
+  hidden,
   limit = 50_000,
   check,
 }: WalkOptions): AsyncGenerator<string> {
@@ -50,6 +56,7 @@ async function* walk({
       const full = join(dir, e.name);
       if (e.isDirectory()) {
         if (!includeSkipped && SKIP_DIRS.has(e.name)) continue;
+        if (!hidden && e.name.startsWith('.')) continue;
         stack.push(full);
       } else if (e.isFile() && check(full)) {
         if (++seen > limit) return;
@@ -61,22 +68,33 @@ async function* walk({
 
 const toRel = (root: string, p: string) => relative(root, p).replaceAll('\\', '/');
 
+/** A pattern that names a hidden folder itself (".github/**", "**\/.config/*") is searched there. */
+const namesHidden = (pattern: string | undefined) => !!pattern && /(^|[\\/])\.[^./\\]/.test(pattern);
+
+const HIDDEN_ARG = z
+  .boolean()
+  .optional()
+  .describe('Also search hidden folders (names starting with "."), which are skipped by default');
+
 export const globTool = defineTool({
   name: 'glob',
   description:
-    'Find files by glob pattern (e.g. "src/**/*.ts"). Returns paths sorted by most recently modified.',
+    'Find files by glob pattern (e.g. "src/**/*.ts"). Returns paths sorted by most recently modified. ' +
+    'Hidden folders are skipped unless the pattern names one or include_hidden is set.',
   risk: 'read',
   parallel: true,
   schema: z.object({
     pattern: z.string().describe('Glob pattern relative to `path`'),
     path: z.string().optional().describe('Directory to search; defaults to the working directory'),
+    include_hidden: HIDDEN_ARG,
   }),
   primaryArg: (i) => i.path ?? '.',
   describe: (i) => i.pattern,
   async execute(input, ctx) {
     const root = ctx.sandbox.checkPath(input.path ?? '.', 'read');
     const hits: { rel: string; mtime: number }[] = [];
-    for await (const f of walk({ root, signal: ctx.signal, check: () => true })) {
+    const hidden = input.include_hidden ?? namesHidden(input.pattern);
+    for await (const f of walk({ root, signal: ctx.signal, hidden, check: () => true })) {
       const rel = toRel(root, f);
       if (
         globMatch(input.pattern, rel) ||
@@ -97,7 +115,8 @@ export const globTool = defineTool({
 export const grepTool = defineTool({
   name: 'grep',
   description:
-    'Search file contents with a regular expression. Returns matching lines as path:line:text. Skips node_modules, .git and build output.',
+    'Search file contents with a regular expression. Returns matching lines as path:line:text. Skips ' +
+    'node_modules, build output and hidden folders (unless the glob names one or include_hidden is set).',
   risk: 'read',
   parallel: true,
   schema: z.object({
@@ -107,6 +126,7 @@ export const grepTool = defineTool({
     ignore_case: z.boolean().optional(),
     max_results: z.number().int().min(1).max(500).optional(),
     context: z.number().int().min(0).max(5).optional().describe('Lines of context around each match'),
+    include_hidden: HIDDEN_ARG,
   }),
   primaryArg: (i) => i.path ?? '.',
   describe: (i) => i.pattern,
@@ -124,6 +144,7 @@ export const grepTool = defineTool({
       ? walk({
           root,
           signal: ctx.signal,
+          hidden: input.include_hidden ?? namesHidden(input.glob),
           check: (p) =>
             !input.glob ||
             globMatch(input.glob, toRel(root, p)) ||

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { platform, release } from 'node:os';
+import { SCREENSHOT_DIR } from '../browser/screenshots.js';
 import type { ApprovalMode } from '../config/schema.js';
 import { detectShell } from '../sandbox/shell.js';
 import { NAME } from '../version.js';
@@ -70,9 +71,11 @@ ${input.toolNames.includes('ask_user') ? '- Ask the user (ask_user) only when yo
 - If a tool call is denied, do not retry it in a different way to get around the restriction; adjust your approach or ask the user.
 - Only stop processes you started yourself, by their process id: never kill programs by name (\`pkill\`/\`killall\`), which also closes the user's own windows.${
     input.toolNames.includes('browser_navigate')
-      ? '\n- To look at a page, including one you built in the project, open it with browser_navigate (a path like `index.html` works) and use browser_snapshot or browser_screenshot. Do not start a browser yourself with bash.'
+      ? '\n- To look at a page, including one you built in the project, open it with browser_navigate (a path like `index.html` works) and use browser_snapshot or browser_screenshot. Do not start a browser yourself with bash. ' +
+        `Screenshots are saved in ${SCREENSHOT_DIR} (each result gives the file's path): never search for them.`
       : ''
-  }${
+  }
+- When you search for files with bash (find, grep -r, rg), search the project, not the whole home folder, and skip hidden folders (e.g. \`find . -not -path '*/.*'\`) unless you need one.${
     input.toolNames.includes('sessions')
       ? '\n- Earlier conversations in this folder are saved. When the user refers to earlier work, or you need a detail a compaction summary left out, look it up with the `sessions` tool instead of guessing or asking.'
       : ''

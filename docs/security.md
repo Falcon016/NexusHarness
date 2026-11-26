@@ -59,6 +59,10 @@ port under a random path prefix, only while the browser is open. Every request i
 rules, so `denyPaths` such as `.env` still apply, and nothing outside the project folder is served. Only GET and HEAD
 are answered, and files are never cached.
 
+Screenshots from `browser_screenshot` are also saved to `<temp>/nexusharness/screenshots/`. The folder is created
+readable only by you (`0700`, files `0600`), because the temporary folder is shared on a multi-user machine. It keeps
+the newest 50.
+
 ## Browser profile
 
 Browser control uses a persistent profile under the app data directory so logins survive. Anything you sign into in
