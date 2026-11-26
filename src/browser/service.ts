@@ -1,13 +1,54 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import type * as PlaywrightModule from 'playwright-core';
 import type { BrowserContext, Page } from 'playwright-core';
 import type { Config } from '../config/schema.js';
 import type { ImageData } from '../llm/types.js';
 import { Emitter } from '../util/emitter.js';
+import { LocalFiles } from './files.js';
 import { globMatch } from '../util/glob.js';
 import { redact } from '../util/redact.js';
 import { truncateMiddle } from '../util/text.js';
 import { wrapUntrusted } from '../util/untrusted.js';
+
+interface BrowserCandidate {
+  label: string;
+  channel?: string;
+  executablePath?: string;
+}
+
+/**
+ * Browsers to try, the configured one first: the other branded ones, a Chromium installed on the system (often
+ * the only one on Linux), then Playwright's own Chromium if it was downloaded.
+ */
+export function browserCandidates(
+  preferred: 'chrome' | 'msedge' | 'chromium',
+  exists: (p: string) => boolean = existsSync,
+  platform: NodeJS.Platform = process.platform,
+): BrowserCandidate[] {
+  const branded: BrowserCandidate[] = [
+    { label: 'chrome', channel: 'chrome' },
+    { label: 'msedge', channel: 'msedge' },
+  ];
+  const system = (
+    platform === 'darwin'
+      ? ['/Applications/Chromium.app/Contents/MacOS/Chromium']
+      : platform === 'win32'
+        ? []
+        : [
+            '/usr/bin/chromium',
+            '/usr/bin/chromium-browser',
+            '/usr/lib/chromium/chromium',
+            '/snap/bin/chromium',
+          ]
+  )
+    .filter((p) => exists(p))
+    .slice(0, 1)
+    .map((p) => ({ label: `chromium (${p})`, executablePath: p }));
+  const bundled: BrowserCandidate = { label: 'chromium' };
+  const all = [...branded, ...system, bundled];
+  const first = all.find((c) => c.label === preferred) ?? bundled;
+  return [first, ...all.filter((c) => c !== first)];
+}
 
 /** Screenshots for the model: at most this wide (CSS pixels), and a full page at most this tall. */
 const SHOT_WIDTH = 1280;
@@ -133,36 +174,63 @@ export class BrowserService {
       );
     }
     mkdirSync(this.profileDir, { recursive: true });
-    let ctx: BrowserContext;
-    try {
-      ctx = await pw.chromium.launchPersistentContext(this.profileDir, {
-        headless: this.cfg.headless,
-        ...(this.cfg.channel === 'chromium' ? {} : { channel: this.cfg.channel }),
-        viewport: null,
-        acceptDownloads: false,
-        permissions: [],
-        args: [
-          '--no-first-run',
-          '--no-default-browser-check',
-          // Keep drawing while the window is covered, minimized or in the background: otherwise Chrome stops
-          // producing frames and a screenshot waits for one until it times out.
-          '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding',
-          '--disable-background-timer-throttling',
-        ],
-      });
-    } catch (e) {
-      throw new BrowserError(
-        `Could not start ${this.cfg.channel}: ${(e as Error).message.split('\n')[0]}. ` +
-          `Install Google Chrome or Microsoft Edge, or run \`npx playwright-core install chromium\` and set browser.channel to "chromium".`,
-      );
+    let ctx: BrowserContext | undefined;
+    // The configured browser first; when it is not installed, the others this machine has, so a machine with
+    // Chromium but not Chrome (common on Linux) still gets browser tools instead of an error.
+    const tried: string[] = [];
+    for (const c of browserCandidates(this.cfg.channel)) {
+      try {
+        ctx = await this.launchWith(pw, c);
+        if (c.label !== this.cfg.channel)
+          this.emit({ type: 'action', text: `using ${c.label} (${this.cfg.channel} is not installed)` });
+        this.using = c.label;
+        break;
+      } catch (e) {
+        const msg = (e as Error).message.split('\n')[0]!;
+        tried.push(`${c.label}: ${msg}`);
+        // Installed but failed to start: say why, rather than trying a different browser.
+        if (!/not found|doesn't exist|does not exist|is not found|no such file|install/i.test(msg)) break;
+      }
     }
+    if (!ctx)
+      throw new BrowserError(
+        `Could not start a browser (${tried.join('; ')}). Install Google Chrome, Microsoft Edge or Chromium, ` +
+          'or run `npx playwright-core install chromium` and set browser.channel to "chromium".',
+      );
+    await this.guardContext(ctx);
+    return ctx;
+  }
+
+  /** Which browser is running: the configured one, or what was found instead. */
+  using: string | undefined;
+
+  private launchWith(pw: Playwright, c: BrowserCandidate): Promise<BrowserContext> {
+    return pw.chromium.launchPersistentContext(this.profileDir, {
+      headless: this.cfg.headless,
+      ...(c.channel ? { channel: c.channel } : {}),
+      ...(c.executablePath ? { executablePath: c.executablePath } : {}),
+      viewport: null,
+      acceptDownloads: false,
+      permissions: [],
+      args: [
+        '--no-first-run',
+        '--no-default-browser-check',
+        // Keep drawing while the window is covered, minimized or in the background: otherwise Chrome stops
+        // producing frames and a screenshot waits for one until it times out.
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-background-timer-throttling',
+      ],
+    });
+  }
+
+  private async guardContext(ctx: BrowserContext): Promise<void> {
     // Enforce the host policy on every top-level navigation, including redirects and link clicks.
     await ctx.route('**/*', async (route) => {
       const req = route.request();
       if (req.resourceType() === 'document') {
         try {
-          checkUrl(req.url(), this.cfg);
+          if (!this.files?.owns(req.url())) checkUrl(req.url(), this.cfg);
         } catch (e) {
           const reason = (e as Error).message;
           this.emit({ type: 'blocked', url: req.url(), reason });
@@ -185,7 +253,6 @@ export class BrowserService {
       this.activePage = p;
     });
     this.emit({ type: 'opened' });
-    return ctx;
   }
 
   private async afterAction(page: Page, text: string): Promise<string> {
@@ -201,8 +268,18 @@ export class BrowserService {
     return wrapUntrusted(`browser:${page.url()}`, truncateMiddle(redact(snap), SNAPSHOT_LIMIT));
   }
 
+  /**
+   * Serves the project's files to the browser (see LocalFiles), set up by the navigate tool with the sandbox's
+   * read check.
+   */
+  private files: LocalFiles | undefined;
+  localFiles(root: string, check: (path: string) => string): LocalFiles {
+    this.files ??= new LocalFiles(root, check);
+    return this.files;
+  }
+
   async navigate(url: string): Promise<string> {
-    checkUrl(url, this.cfg);
+    if (!this.files?.owns(url)) checkUrl(url, this.cfg);
     const page = await this.ensure();
     this.emit({ type: 'action', text: `navigate ${url}` });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -395,5 +472,7 @@ export class BrowserService {
     this.context = undefined;
     this.activePage = undefined;
     await ctx?.close().catch(() => undefined);
+    await this.files?.close();
+    this.files = undefined;
   }
 }
