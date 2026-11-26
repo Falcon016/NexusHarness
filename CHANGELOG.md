@@ -4,6 +4,16 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Loops of tool calls are stopped, not just pointed out.** A model took 36 screenshots of the same page and kept
+  going: each result named a new saved file, so no two looked the same, and the loop was never noticed.
+  - **Results compared on what matters:** saved-file paths, clock times and durations are ignored, and pictures are
+    compared by their contents.
+  - **Changing results:** the very same call 8 times in a row is a loop even if its result keeps changing, such as
+    an animated page or polling one call at a time.
+  - **Sampling:** from the second reminder, the next request discourages repetition.
+  - **Not run again:** after three reminders, a call that is part of the loop, made straight after another, is
+    answered with the loop note instead of being run (marked as an error), until the model moves on. A call made
+    after other work, like a screenshot after an edit, always runs. The turn and the task carry on either way.
 - **Pages in the project open in the browser.**
   - `browser_navigate` takes a path (`index.html`, `site/`) or a `file://` URL in the project.
   - The page is served from a private `127.0.0.1` address, so module scripts, fetch and WebGL work.

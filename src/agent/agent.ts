@@ -52,7 +52,14 @@ import {
   type ThinkingStats,
 } from './thinking.js';
 import type { Learner } from '../learn/learner.js';
-import { ActionWatch, actionLoopNote, watchRepeats, WritingLoop, writingLoopNote } from './loops.js';
+import {
+  ActionWatch,
+  actionLoopNote,
+  actionRefusalNote,
+  watchRepeats,
+  WritingLoop,
+  writingLoopNote,
+} from './loops.js';
 import type { SkillAccess } from '../tools/types.js';
 
 export type AgentEvent =
@@ -1256,6 +1263,21 @@ export class Agent {
         results.set(p.call.id, note ? { ...p.early, content: p.early.content + note } : p.early);
         return;
       }
+      // A call the model keeps repeating after several reminders is answered with the loop note instead of
+      // being run again (see ActionWatch.refuse): the loop stops costing time, and the model has to move on.
+      const refused = this.o.config.loopDetection ? this.actions.refuse(p.call.name, p.input) : undefined;
+      if (refused) {
+        this.loopedThisRound = true;
+        this.nextRequest = { ...this.nextRequest, antiRepeat: 3 };
+        const r: ToolResult = { content: actionRefusalNote(refused, this.currentTask()), isError: true };
+        results.set(p.call.id, r);
+        this.emit({
+          type: 'status',
+          text: `Loop: ${safeDescribe(p.tool!, p.input!)} not run again (reminder ${refused.strike}); the model has to take another step.`,
+        });
+        this.emit({ type: 'tool_end', id: p.call.id, name: p.call.name, result: r });
+        return;
+      }
       let result = await this.o.tools.run(p.call.name, p.input, this.toolContext(signal, p.call.id));
       const after = await this.o.hooks?.afterTool?.({
         agentId: this.id,
@@ -1277,17 +1299,22 @@ export class Agent {
         // Told in the result itself, every time round: nothing is stopped, skipped or undone.
         this.loopedThisRound = true;
         if (loop.strike === 3) this.wantStronger = true;
+        // From the second reminder, the next request discourages repetition a little, as after a writing loop.
+        if (loop.strike >= 2)
+          this.nextRequest = { ...this.nextRequest, antiRepeat: Math.min(3, loop.strike - 1) };
         result = { ...result, content: result.content + actionLoopNote(loop, this.currentTask()) };
         const what = safeDescribe(p.tool!, p.input!);
         this.emit({
           type: 'status',
           text:
             `Loop: ${what} ` +
-            (loop.kind === 'repeat'
-              ? `gave the same result ${loop.count} times`
-              : loop.period === 1
-                ? `repeated ${loop.count} times in a row with the same result`
-                : `is part of a ${loop.period}-call cycle repeated ${loop.count} times`) +
+            (loop.kind === 'same'
+              ? `made ${loop.count} times in a row`
+              : loop.kind === 'repeat'
+                ? `gave the same result ${loop.count} times`
+                : loop.period === 1
+                  ? `repeated ${loop.count} times in a row with the same result`
+                  : `is part of a ${loop.period}-call cycle repeated ${loop.count} times`) +
             (loop.strike === 1
               ? '. Asked the model to change approach.'
               : `. Reminded it again (${loop.strike}).`),

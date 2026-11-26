@@ -180,8 +180,12 @@ export function writingLoopNote(e: WritingLoop): string {
 // ---- repeated actions -------------------------------------------------------------------------------
 
 export interface ActionLoop {
-  /** 'cycle': the same calls in the same order with the same results; 'repeat': one result again and again. */
-  kind: 'cycle' | 'repeat';
+  /**
+   * 'cycle': the same calls in the same order with the same results; 'repeat': one result again and again;
+   * 'same': the very same call many times in a row, whatever it returned (a screenshot of an animated page,
+   * polling with a call each time).
+   */
+  kind: 'cycle' | 'repeat' | 'same';
   /** Calls in one round of a cycle (1 = the same call back to back). */
   period: number;
   /** Rounds of the cycle, or times the result was seen. */
@@ -194,8 +198,25 @@ const WINDOW = 20;
 const ROUNDS = 3;
 const REPEATS = 4;
 const MAX_PERIOD = 4;
+/** The same call this many times in a row is a loop even when its result keeps changing. */
+const SAME_CALL = 8;
+/** From this reminder on, a call that is part of the loop is not run again: it is answered with the loop note. */
+export const REFUSE_FROM = 3;
 /** Calls without a loop after which the loop counts as over. */
 const CALM = 8;
+
+/**
+ * Parts of a result that change every time without saying anything: where a screenshot was saved, clock times,
+ * how long something took. Left in, they make every result look new, and a loop goes unnoticed (a model once
+ * took 36 screenshots of the same page, each "saved to" a new file).
+ */
+const VOLATILE: [RegExp, string][] = [
+  [/\bSaved to \S+/g, 'Saved to <file>'],
+  [/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?\b/g, '<time>'],
+  [/\b\d{1,2}:\d{2}:\d{2}(\.\d+)?\b/g, '<time>'],
+  [/\b\d+(\.\d+)?\s?(ms|µs|s|sec|secs|seconds)\b/g, '<duration>'],
+];
+export const steady = (s: string) => VOLATILE.reduce((t, [re, to]) => t.replace(re, to), s);
 
 const stable = (v: unknown): string =>
   Array.isArray(v)
@@ -213,29 +234,60 @@ const hash = (s: string) => createHash('sha1').update(s).digest('base64').slice(
  * not hide a loop from it). A result that changes is progress, so polling something until it changes is fine.
  */
 export class ActionWatch {
-  private seen: string[] = [];
+  /** Each call's fingerprint (the call and its result) and the call alone. */
+  private seen: { fp: string; call: string }[] = [];
   private strikes = 0;
   private calm = 0;
+  /** The same call, back to back: which, and how many times. */
+  private run = { call: '', n: 0 };
+  /** The calls that make up the loop last found. */
+  private looping = new Set<string>();
+  private last: Omit<ActionLoop, 'strike'> | undefined;
 
   observe(
     name: string,
     input: unknown,
-    result: { content: string; isError?: boolean },
+    result: { content: string; isError?: boolean; images?: { data: string }[] },
   ): ActionLoop | undefined {
-    const fp = `${name}:${hash(stable(input))}:${hash(`${result.isError ? 'E' : ''}${result.content}`)}`;
-    this.seen.push(fp);
+    const call = `${name}:${hash(stable(input))}`;
+    // The picture counts too: a screenshot that shows something new is progress.
+    const images = (result.images ?? []).map((i) => hash(i.data)).join(',');
+    const fp = `${call}:${hash(`${result.isError ? 'E' : ''}${steady(result.content)}|${images}`)}`;
+    this.seen.push({ fp, call });
     if (this.seen.length > WINDOW) this.seen.shift();
+    this.run = this.run.call === call ? { call, n: this.run.n + 1 } : { call, n: 1 };
     const found = this.find();
     if (!found) {
-      if (++this.calm >= CALM) this.strikes = 0;
+      if (++this.calm >= CALM) {
+        this.strikes = 0;
+        this.looping.clear();
+      }
       return undefined;
     }
     this.calm = 0;
-    return { ...found, strike: ++this.strikes };
+    this.last = found.loop;
+    this.looping = found.calls;
+    return { ...found.loop, strike: ++this.strikes };
   }
 
-  private find(): Omit<ActionLoop, 'strike'> | undefined {
-    const s = this.seen;
+  /**
+   * Whether to answer this call with the loop note instead of running it: the model has been told REFUSE_FROM
+   * times already, and it is making one of the loop's calls straight after another of them, with nothing else
+   * in between that could have changed the answer. After any other call (an edit, say) it runs as usual, so
+   * checking the effect of a change is never refused.
+   */
+  refuse(name: string, input: unknown): ActionLoop | undefined {
+    if (this.strikes < REFUSE_FROM || !this.last) return undefined;
+    const call = `${name}:${hash(stable(input))}`;
+    if (!this.looping.has(call) || !this.looping.has(this.run.call)) return undefined;
+    this.calm = 0;
+    this.run = this.run.call === call ? { call, n: this.run.n + 1 } : { call, n: 1 };
+    return { ...this.last, count: this.last.count + 1, strike: ++this.strikes };
+  }
+
+  private find(): { loop: Omit<ActionLoop, 'strike'>; calls: Set<string> } | undefined {
+    const s = this.seen.map((x) => x.fp);
+    const callsOf = (n: number) => new Set(this.seen.slice(-n).map((x) => x.call));
     for (let p = 1; p <= MAX_PERIOD; p++) {
       if (s.length < p * ROUNDS) break;
       const round = s.slice(-p);
@@ -247,26 +299,33 @@ export class ActionWatch {
         s.slice(-(rounds + 1) * p, -rounds * p).every((x, i) => x === round[i])
       )
         rounds++;
-      if (rounds >= ROUNDS) return { kind: 'cycle', period: p, count: rounds };
+      if (rounds >= ROUNDS) return { loop: { kind: 'cycle', period: p, count: rounds }, calls: callsOf(p) };
     }
     const last = s.at(-1)!;
     const count = s.filter((x) => x === last).length;
-    return count >= REPEATS ? { kind: 'repeat', period: 1, count } : undefined;
+    if (count >= REPEATS) return { loop: { kind: 'repeat', period: 1, count }, calls: callsOf(1) };
+    if (this.run.n >= SAME_CALL)
+      return { loop: { kind: 'same', period: 1, count: this.run.n }, calls: callsOf(1) };
+    return undefined;
   }
 }
 
 /** What the model is told, in the tool result, each time it goes round a loop. */
 export function actionLoopNote(loop: ActionLoop, task?: string): string {
   const what =
-    loop.kind === 'repeat'
-      ? `This call has now given exactly the same result ${loop.count} times recently. If you are trying to ` +
-        'change that result, what you are doing in between is not reaching the cause: re-read it carefully and ' +
-        'question your assumptions. If you already have what you need from it, use it instead of asking again.'
-      : loop.period === 1
-        ? `You have made this exact call ${loop.count} times in a row and got the same result each time. ` +
-          'Making it again will not change anything.'
-        : `You are going round in a loop: the same ${loop.period} calls, in the same order, with the same ` +
-          `results, ${loop.count} times. Going round again will not change anything.`;
+    loop.kind === 'same'
+      ? `You have made this same call ${loop.count} times in a row. If you are waiting for something, wait ` +
+        'inside one command (a loop with sleep and a time limit) instead of calling again and again; if it is a ' +
+        'screenshot or a snapshot, the page has not changed in between, so look at the one you have.'
+      : loop.kind === 'repeat'
+        ? `This call has now given exactly the same result ${loop.count} times recently. If you are trying to ` +
+          'change that result, what you are doing in between is not reaching the cause: re-read it carefully and ' +
+          'question your assumptions. If you already have what you need from it, use it instead of asking again.'
+        : loop.period === 1
+          ? `You have made this exact call ${loop.count} times in a row and got the same result each time. ` +
+            'Making it again will not change anything.'
+          : `You are going round in a loop: the same ${loop.period} calls, in the same order, with the same ` +
+            `results, ${loop.count} times. Going round again will not change anything.`;
   const then =
     loop.strike === 1
       ? ' Try a different approach. If you are waiting for something to change, find out why it has not ' +
@@ -277,6 +336,23 @@ export function actionLoopNote(loop: ActionLoop, task?: string): string {
     ` Keep going until the task${task ? ` ("${task}")` : ''} is actually done: do not skip it, give up on it, ` +
     'or mark it done before it is.';
   return `\n\n${LOOP_NOTE} ${what}${then}${keep}`;
+}
+
+/**
+ * The answer to a call that was not run because it is part of a loop the model has been told about several
+ * times. It is an error result, so the model reads it as "this did not happen", and it says what to do instead.
+ */
+export function actionRefusalNote(loop: ActionLoop, task?: string): string {
+  return (
+    `${LOOP_NOTE} Not run. This call is part of a loop you have been told about ${loop.strike - 1} times: ` +
+    (loop.kind === 'same'
+      ? `the same call ${loop.count} times in a row. `
+      : `it has already given the same result again and again. `) +
+    'Running it again cannot tell you anything new, so it was not run. Use the results you already have: ' +
+    'write down in one or two sentences what they show and what you will do differently, then take a ' +
+    `different step. Keep going until the task${task ? ` ("${task}")` : ''} is done; this call becomes ` +
+    'available again once you have moved on to other work.'
+  );
 }
 
 /** Messages the harness wrote to the model (loop checks, reasoning wrap-ups), not the user's own words. */
