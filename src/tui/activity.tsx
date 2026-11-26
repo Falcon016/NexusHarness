@@ -1,6 +1,6 @@
-import { Text, useAnimation } from 'ink';
+import { Text } from 'ink';
 import { useTheme } from './context.js';
-import { fmtDuration, type LiveAgent, type UiSnapshot } from './store.js';
+import { animationFrame, fmtDuration, type LiveAgent, type UiSnapshot } from './store.js';
 
 /**
  * The line under the live area that says what the agent is doing right now, in plain words, and for how long:
@@ -137,7 +137,8 @@ function Shimmer({ text, frame }: { text: string; frame: number }) {
 export function ActivityLine({ snap }: { snap: UiSnapshot }) {
   const t = useTheme();
   const busy = !!snap.compacting || snap.live.some((a) => a.running) || !!snap.status;
-  const { frame } = useAnimation({ interval: 100, isActive: busy });
+  // Moved by the store's heartbeat while busy (see UiStore.beat).
+  const frame = busy ? animationFrame() : 0;
   const d = describeActivity(snap);
   if (!d) return null;
   return (

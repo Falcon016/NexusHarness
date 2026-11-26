@@ -197,3 +197,34 @@ describe('the store follows what the agent does', () => {
     });
   });
 });
+
+describe('drawing the UI on one schedule', () => {
+  it('spaces updates further apart when frames are slow to draw, and back when they are quick', () => {
+    const store = new UiStore();
+    expect(store.frameInterval()).toBe(50);
+    for (let i = 0; i < 30; i++) store.frameDrawn(40);
+    expect(store.frameInterval()).toBe(160); // drawing takes about a quarter of the time
+    for (let i = 0; i < 30; i++) store.frameDrawn(500);
+    expect(store.frameInterval()).toBe(250); // never slower than 4 a second
+    for (let i = 0; i < 40; i++) store.frameDrawn(2);
+    expect(store.frameInterval()).toBe(50);
+  });
+
+  it('keeps animations moving while the agent works, and stops when it is idle', async () => {
+    const store = new UiStore();
+    const { fire } = feeder(store);
+    let published = 0;
+    store.subscribe(() => published++);
+    fire({ type: 'turn_start' });
+    (store as unknown as { flush(): void }).flush();
+    const before = published;
+    await new Promise((r) => setTimeout(r, 350));
+    expect(published - before).toBeGreaterThanOrEqual(2); // the heartbeat, with no events coming in
+    fire({ type: 'turn_end', stopReason: 'end_turn' });
+    (store as unknown as { flush(): void }).flush();
+    const idle = published;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(published).toBe(idle);
+    store.dispose();
+  });
+});

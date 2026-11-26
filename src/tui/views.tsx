@@ -1,19 +1,19 @@
 import { useDrawSize } from './size.js';
 import { ActivityLine } from './activity.js';
-import { Box, Text, useAnimation } from 'ink';
+import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import type { ApprovalMode } from '../config/schema.js';
 import type { TodoItem } from '../tools/types.js';
 import { NAME, VERSION } from '../version.js';
 import { agentColor, useTheme } from './context.js';
 import { diffColor, fitTail, Markdown } from './markdown.js';
-import type { Item, LiveAgent, UiSnapshot } from './store.js';
+import { animationFrame, type Item, type LiveAgent, type UiSnapshot } from './store.js';
 import { Mascot } from './mascot.js';
 import { GLYPH, MODE_STYLE } from './theme.js';
 
+/** The spinner's glyph now. It moves with the store's heartbeat (see UiStore.beat), not a timer of its own. */
 export function useSpinner(active: boolean): string {
-  const { frame } = useAnimation({ interval: 110, isActive: active });
-  return GLYPH.spinner[frame % GLYPH.spinner.length]!;
+  return GLYPH.spinner[active ? animationFrame(110) % GLYPH.spinner.length : 0]!;
 }
 
 const fmtTokens = (n: number) =>
