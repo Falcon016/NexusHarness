@@ -51,6 +51,14 @@ Each command runs `docker|podman run --rm` with: no host environment variables, 
 `/workspace`, and the invoking user's uid/gid on POSIX. A timeout or Ctrl-C also `kill`s the named container. Note that
 the project directory is writable by the container — that is what makes edits visible to you.
 
+## Local pages in the browser
+
+The browser never opens `file://` URLs: a local page could link to any file on the disk, where the host checks don't
+apply. A page in the project, like `browser_navigate("index.html")`, is instead served from `127.0.0.1` on a random
+port under a random path prefix, only while the browser is open. Every request is checked against the sandbox's read
+rules, so `denyPaths` such as `.env` still apply, and nothing outside the project folder is served. Only GET and HEAD
+are answered, and files are never cached.
+
 ## Browser profile
 
 Browser control uses a persistent profile under the app data directory so logins survive. Anything you sign into in

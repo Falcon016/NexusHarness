@@ -4,6 +4,14 @@
 
 First release of the ground-up rewrite (replaces the earlier turtlebot harness).
 
+- **Pages in the project open in the browser.**
+  - `browser_navigate` takes a path (`index.html`, `site/`) or a `file://` URL in the project.
+  - The page is served from a private `127.0.0.1` address, so module scripts, fetch and WebGL work.
+  - Every file is checked against the sandbox, so `denyPaths` still apply, and nothing outside the project is served.
+  - Models used to fall back to running `chromium --headless --screenshot` themselves, which failed on WebGL pages.
+- **The browser starts on machines without Google Chrome.** Edge is tried next, then a system Chromium
+  (`/usr/bin/chromium` and similar), then Playwright's own Chromium. Before, the browser tools just failed.
+- **The model is told not to kill programs by name.** `pkill -f chromium` closes the user's own browser windows too.
 - **Keeps up with fast models on slower machines.**
   - All the UI's animations now run off one clock, instead of three that kept missing each other.
   - The gap between updates grows when drawing a frame is slow, so drawing takes about a quarter of the time at most.

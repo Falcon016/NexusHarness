@@ -1,8 +1,12 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BrowserService } from '../src/browser/service.js';
+import { browserTools } from '../src/browser/tools.js';
+import { GuardSandbox } from '../src/sandbox/guard.js';
+import type { ToolContext } from '../src/tools/types.js';
 import { findBrowser, tmpWorkspace } from './helpers.js';
 
 const channel = findBrowser();
@@ -89,6 +93,35 @@ describe.skipIf(!channel)('live browser control', () => {
     } finally {
       await strict.close();
     }
+  }, 30_000);
+
+  it('opens a page from the project over a local address, with its module scripts and WebGL', async () => {
+    mkdirSync(join(ws.dir, 'game'), { recursive: true });
+    writeFileSync(
+      join(ws.dir, 'game', 'index.html'),
+      '<!doctype html><title>loading</title><canvas id="c" width="300" height="150"></canvas>' +
+        '<script type="module" src="main.js"></script>',
+    );
+    writeFileSync(
+      join(ws.dir, 'game', 'main.js'),
+      "const gl = document.getElementById('c').getContext('webgl');\n" +
+        'if (gl) { gl.clearColor(0, 0.5, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT); }\n' +
+        "document.title = gl ? 'game ready' : 'game ready (no webgl)';\n",
+    );
+    const navigate = browserTools.find((t) => t.name === 'browser_navigate')!;
+    const ctx = {
+      cwd: ws.dir,
+      sandbox: new GuardSandbox({ cwd: ws.dir }),
+      browser: svc,
+    } as unknown as ToolContext;
+    const r = await navigate.execute({ url: 'game/' } as never, ctx);
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toMatch(/http:\/\/127\.0\.0\.1:\d+\/[\w-]+\/game\//);
+    await expect.poll(() => svc.snapshot(), { timeout: 5000 }).toContain('game ready');
+    expect((await svc.screenshot()).image.mediaType).toBe('image/jpeg');
+    // Nothing outside the project.
+    const outside = await navigate.execute({ url: 'file:///etc/hostname' } as never, ctx);
+    expect(outside.isError).toBe(true);
   }, 30_000);
 
   /** Width and height of a JPEG, from its frame header. */

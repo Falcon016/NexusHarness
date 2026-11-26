@@ -47,9 +47,11 @@ It has **no default model**: you pick one, and the harness reads that model's re
 - **Layered sandbox.** `off`, `guard` (file tools confined to the workspace, symlink-safe, deny-globs for `.env` / keys,
   secrets scrubbed from the environment of every command) and `container` (every command runs in a throw-away Docker
   container: no host env, no network by default, capabilities dropped, resource-limited).
-- **Live browser control.** The agent drives a real Chrome/Edge window through Playwright. You watch every step and can
-  take over with `/browser takeover`. Pages are read as accessibility snapshots with element refs; everything from the
-  page is wrapped as untrusted data; host allow/block lists are enforced on _every_ navigation, including link clicks.
+- **Live browser control.** The agent drives a real Chrome, Edge or Chromium window through Playwright, using whichever
+  is installed. You watch every step and can take over with `/browser takeover`. Pages are read as accessibility
+  snapshots with element refs; everything from the page is wrapped as untrusted data; host allow/block lists are
+  enforced on _every_ navigation, including link clicks. Pages the agent builds in the project open from a private
+  local address (`browser_navigate("index.html")`), with their scripts and WebGL working.
 - **Collaborative swarms that behave like normal sessions.** `/swarm trio` starts several agents in one shared channel.
   They message each other, hand off work and share notes; you watch live and can interject (`@builder use the new API`).
   Each member has its own persistent conversation with the same compaction and resume as the main agent, and a whole
